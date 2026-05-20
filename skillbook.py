@@ -1,7 +1,6 @@
 import os
 import csv
 import re
-import math
 import json
 import fnmatch
 import sys
@@ -9,9 +8,7 @@ from datetime import datetime, date
 from collections import defaultdict
 
 from github import Github, Auth
-
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -19,12 +16,8 @@ TOKEN = os.getenv("GITHUB_TOKEN")
 USERNAME = os.getenv("GITHUB_USERNAME")
 SINCE_DATE = os.getenv("SINCE_DATE", "2023-01-01")
 
-MAX_LINES_FOR_WEIGHT = 300
-
 if not TOKEN:
     raise ValueError("GITHUB_TOKEN not found in .env")
-
-
 
 COMMIT_TYPE_PATTERNS = [
     (r"^feat[(:]", "feature"),
@@ -45,25 +38,25 @@ IGNORE_GLOBS = [
     "*.svg", "*.png", "*.jpg", "*.ico", "*.gif",
 ]
 
+
 # ═══════════════════════════════════════════════
-# ЗАГРУЗКА KNOWLEDGE BASE
+# KNOWLEDGE BASE
 # ═══════════════════════════════════════════════
 
 def load_kb():
-    """Загружает technologies.json из одной папки со скриптом."""
     kb_path = os.path.join(os.path.dirname(__file__), "technologies.json")
     with open(kb_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
 
 KB = load_kb()
 
 
 # ═══════════════════════════════════════════════
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# HELPERS
 # ═══════════════════════════════════════════════
 
 def match_glob(filepath, pattern):
-    """Glob с поддержкой **"""
     if "**" in pattern:
         prefix, suffix = pattern.split("**", 1)
         return filepath.startswith(prefix.rstrip("/")) and filepath.endswith(suffix.lstrip("/"))
@@ -71,7 +64,6 @@ def match_glob(filepath, pattern):
 
 
 def classify_commit(message):
-    """Тип коммита по сообщению"""
     for pattern, ctype in COMMIT_TYPE_PATTERNS:
         if re.search(pattern, message, re.IGNORECASE):
             return ctype
@@ -79,16 +71,9 @@ def classify_commit(message):
 
 
 def extract_skills_from_file(file_info):
-    """
-    Принимает объект файла из GitHub API.
-    Возвращает список: [(skill, confidence, category, patch_weight, multiplier), ...]
-
-    Правила загружаются из technologies.json.
-    """
     path = file_info.filename
     patch = file_info.patch or ""
 
-    # Быстрый фильтр мусора
     for glob in IGNORE_GLOBS:
         if match_glob(path, glob):
             return []
@@ -99,43 +84,32 @@ def extract_skills_from_file(file_info):
     for tech_name, tech in technologies.items():
         detection = tech.get("detection", {})
         confidence = 0.0
-        path_weight = 0
 
-        # Path-based detection
-        for patterns in detection.get("paths", []):
-            if match_glob(path, patterns):
+        for pattern in detection.get("paths", []):
+            if match_glob(path, pattern):
                 confidence += 0.3
                 break
 
-        # Import-based detection
         for pattern in detection.get("imports", []):
             if f"import {pattern}" in patch or f"from {pattern}" in patch:
                 confidence += 0.4
                 break
 
-        # Pattern-based detection (regex)
         for pattern in detection.get("patterns", []):
             if re.search(pattern, patch, re.IGNORECASE | re.MULTILINE):
                 confidence += 0.3
-                path_weight += 1
                 break
 
-        # Dependency detection
         for dep in detection.get("dependencies", []):
             if dep in patch:
                 confidence += 0.2
                 break
 
         if confidence >= 0.3:
-            multiplier = tech.get("language_multiplier", 1.0)
-            category = tech.get("category", "unknown")
-
             results.append((
                 tech_name,
                 min(confidence, 1.0),
-                category,
-                path_weight,
-                multiplier,
+                tech.get("category", "unknown"),
             ))
 
     return results
@@ -145,21 +119,8 @@ def is_merge_commit(commit):
     return len(commit.parents) > 1
 
 
-def compute_weight(changes, confidence, patch_weight, multiplier=1.0):
-    """Нормализованный вес с учётом language_multiplier"""
-    capped = min(changes, MAX_LINES_FOR_WEIGHT)
-    base = math.log1p(capped)
-    return round((base + patch_weight) * confidence * multiplier, 2)
-
-
-def recency_factor(commit_date_str, half_life_days=365):
-    """Экспоненциальное затухание: 1 день → ~1.0, 365 дней → ~0.37"""
-    days_ago = (date.today() - datetime.strptime(commit_date_str, "%Y-%m-%d").date()).days
-    return math.exp(-days_ago / half_life_days)
-
-
 # ═══════════════════════════════════════════════
-# СБОР КОММИТОВ
+# COLLECT
 # ═══════════════════════════════════════════════
 
 def collect_commits(g, username, repos, since_date):
@@ -201,25 +162,19 @@ def collect_commits(g, username, repos, since_date):
 
                     skills = extract_skills_from_file(file)
 
-                    for skill, confidence, category, patch_weight, multiplier in skills:
-                        weight = compute_weight(changes, confidence, patch_weight, multiplier)
-                        extension = os.path.splitext(file.filename)[1] or "no-ext"
-
+                    for skill, confidence, category in skills:
                         results.append({
                             "date": commit_date,
                             "repo": repo_name,
                             "sha": sha,
                             "commit_type": commit_type,
                             "file": file.filename,
-                            "extension": extension,
                             "skill": skill,
                             "category": category,
                             "confidence": round(confidence, 2),
                             "additions": additions,
                             "deletions": deletions,
                             "changes": changes,
-                            "weight": weight,
-                            "patch_available": bool(file.patch),
                             "message": message,
                         })
 
@@ -231,7 +186,7 @@ def collect_commits(g, username, repos, since_date):
 
 
 # ═══════════════════════════════════════════════
-# АГРЕГАЦИЯ И ВЫВОД
+# PROFILE
 # ═══════════════════════════════════════════════
 
 def save_to_csv(results, filename="skills.csv"):
@@ -241,9 +196,8 @@ def save_to_csv(results, filename="skills.csv"):
 
     fields = [
         "date", "repo", "sha", "commit_type",
-        "file", "extension", "skill", "category",
-        "confidence", "additions", "deletions", "changes",
-        "weight", "patch_available", "message",
+        "file", "skill", "category",
+        "confidence", "additions", "deletions", "changes", "message",
     ]
 
     with open(filename, "w", newline="", encoding="utf-8") as f:
@@ -255,7 +209,6 @@ def save_to_csv(results, filename="skills.csv"):
 
 
 def build_cooccurrence(results):
-    """Какие навыки встречаются в одних коммитах"""
     commit_skills = defaultdict(set)
     for r in results:
         commit_skills[r["sha"]].add(r["skill"])
@@ -271,35 +224,24 @@ def build_cooccurrence(results):
 
 
 def build_profile(results):
-    """Агрегированный профиль с recency decay"""
     profile = defaultdict(lambda: {
-        "unique_commits": set(),
+        "commits": set(),
         "repos": set(),
-        "total_lines": 0,
-        "total_weight": 0.0,
-        "recency_weight": 0.0,
-        "commit_types": defaultdict(int),
+        "files": set(),
+        "lines": 0,
         "first_used": None,
         "last_used": None,
         "category": "",
-        "monthly_activity": defaultdict(float),
     })
 
     for r in results:
         skill = r["skill"]
         p = profile[skill]
 
-        p["unique_commits"].add(r["sha"])
+        p["commits"].add(r["sha"])
         p["repos"].add(r["repo"])
-        p["total_lines"] += r["changes"]
-        p["total_weight"] += r["weight"]
-
-        rf = recency_factor(r["date"])
-        p["recency_weight"] += r["weight"] * rf
-
-        if "commit_types_set" not in p:
-            p["commit_types_set"] = defaultdict(set)
-        p["commit_types_set"][r["commit_type"]].add(r["sha"])
+        p["files"].add(r["file"])
+        p["lines"] += r["changes"]
 
         if p["first_used"] is None or r["date"] < p["first_used"]:
             p["first_used"] = r["date"]
@@ -307,9 +249,6 @@ def build_profile(results):
             p["last_used"] = r["date"]
 
         p["category"] = r["category"]
-
-        month = r["date"][:7]
-        p["monthly_activity"][month] += r["weight"] * rf
 
     return profile
 
@@ -328,24 +267,14 @@ def print_profile(results):
 
     sorted_skills = sorted(
         profile.items(),
-        key=lambda x: x[1]["recency_weight"],
+        key=lambda x: len(x[1]["commits"]),
         reverse=True
     )
 
     for skill, data in sorted_skills[:20]:
-        commits_count = len(data["unique_commits"])
+        commits_count = len(data["commits"])
         repos_count = len(data["repos"])
-
-        # commit_types уникально по SHA
-        commit_types_counts = {
-            t: len(shas) for t, shas in data.get("commit_types_set", {}).items()
-        }
-        types_str = ", ".join(
-            f"{t}:{c}" for t, c in sorted(
-                commit_types_counts.items(),
-                key=lambda x: x[1], reverse=True
-            )[:3]
-        )
+        files_count = len(data["files"])
 
         last_date = datetime.strptime(data["last_used"], "%Y-%m-%d").date()
         days_since = (date.today() - last_date).days
@@ -357,10 +286,8 @@ def print_profile(results):
             status = "⚪ declining"
 
         print(f"\n{skill} ({data['category']}) {status}")
-        print(f"  Коммитов: {commits_count}  |  Репозиториев: {repos_count}")
-        print(f"  Строк изменено: {data['total_lines']}")
-        print(f"  Вес сырой: {data['total_weight']:.1f}  →  с recency: {data['recency_weight']:.1f}")
-        print(f"  Типы: {types_str}")
+        print(f"  Коммитов: {commits_count}  |  Репо: {repos_count}  |  Файлов: {files_count}")
+        print(f"  Строк изменено: {data['lines']}")
         print(f"  Период: {data['first_used']} → {data['last_used']}")
 
         if skill in cooc:
@@ -372,23 +299,17 @@ def print_profile(results):
     # JSON
     json_profile = {}
     for skill, data in profile.items():
-        commit_types_counts = {
-            t: len(shas) for t, shas in data.get("commit_types_set", {}).items()
-        }
         json_profile[skill] = {
             "category": data["category"],
-            "unique_commits": len(data["unique_commits"]),
+            "commits": len(data["commits"]),
             "repos": sorted(data["repos"]),
-            "total_lines": data["total_lines"],
-            "raw_weight": round(data["total_weight"], 1),
-            "recency_weight": round(data["recency_weight"], 1),
+            "files": len(data["files"]),
+            "lines": data["lines"],
             "first_used": data["first_used"],
             "last_used": data["last_used"],
             "status": "active" if (date.today() - datetime.strptime(data["last_used"], "%Y-%m-%d").date()).days <= 30 else (
                 "stale" if (date.today() - datetime.strptime(data["last_used"], "%Y-%m-%d").date()).days <= 180 else "declining"
             ),
-            "commit_types": commit_types_counts,
-            "monthly_activity": dict(sorted(data["monthly_activity"].items())),
         }
 
     json_cooc = {}
@@ -408,7 +329,6 @@ def print_profile(results):
 # ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # CLI: python skillbook.py username
     if len(sys.argv) > 1:
         USERNAME = sys.argv[1]
 
@@ -424,5 +344,5 @@ if __name__ == "__main__":
 
     os.makedirs("output", exist_ok=True)
     results = collect_commits(g, USERNAME, repos, SINCE_DATE)
-    save_to_csv(results, "output/skills_v3.csv")
+    save_to_csv(results, "output/skills.csv")
     print_profile(results)
