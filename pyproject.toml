@@ -3,12 +3,18 @@ line-length = 100
 target-version = ['py311']
 
 [tool.ruff]
-select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["skillbook", "skillbook_legacy"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

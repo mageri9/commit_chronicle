@@ -1,12 +1,13 @@
+import base64
+import json
 import os
 import re
-import json
-import base64
-from datetime import datetime, date
 from collections import defaultdict
+from contextlib import suppress
+from datetime import date, datetime
 
-from github import Github, Auth
 from dotenv import load_dotenv
+from github import Auth, Github
 
 # =========================================================
 # CONFIG
@@ -82,7 +83,6 @@ TECHNOLOGIES = {
             "keywords": [],
         },
     },
-
     # --- Python Backend ---
     "fastapi": {
         "name": "FastAPI",
@@ -114,7 +114,6 @@ TECHNOLOGIES = {
             "keywords": ["Flask(__name__)"],
         },
     },
-
     # --- Python Data ---
     "sqlalchemy": {
         "name": "SQLAlchemy",
@@ -146,7 +145,6 @@ TECHNOLOGIES = {
             "keywords": ["pd.DataFrame", "pd.read_csv"],
         },
     },
-
     # --- Python Async ---
     "asyncio": {
         "name": "asyncio",
@@ -168,7 +166,6 @@ TECHNOLOGIES = {
             "keywords": ["aiohttp.ClientSession"],
         },
     },
-
     # --- Testing ---
     "pytest": {
         "name": "pytest",
@@ -180,7 +177,6 @@ TECHNOLOGIES = {
             "keywords": ["def test_", "@pytest.fixture"],
         },
     },
-
     # --- Frontend ---
     "react": {
         "name": "React",
@@ -202,7 +198,6 @@ TECHNOLOGIES = {
             "keywords": ["getServerSideProps", "use client"],
         },
     },
-
     # --- Databases ---
     "postgresql": {
         "name": "PostgreSQL",
@@ -234,7 +229,6 @@ TECHNOLOGIES = {
             "keywords": ["mongodb://", "MongoClient"],
         },
     },
-
     # --- DevOps ---
     "docker": {
         "name": "Docker",
@@ -276,7 +270,6 @@ TECHNOLOGIES = {
             "keywords": ["proxy_pass", "upstream "],
         },
     },
-
     # --- Cloud ---
     "aws": {
         "name": "AWS",
@@ -288,7 +281,6 @@ TECHNOLOGIES = {
             "keywords": ["aws_access_key", "s3://", "arn:aws:"],
         },
     },
-
     # --- Message Queues ---
     "celery": {
         "name": "Celery",
@@ -310,7 +302,6 @@ TECHNOLOGIES = {
             "keywords": ["KafkaConsumer", "KafkaProducer"],
         },
     },
-
     # --- APIs ---
     "graphql": {
         "name": "GraphQL",
@@ -342,7 +333,6 @@ TECHNOLOGIES = {
             "keywords": ["ws://", "wss://", "@app.websocket"],
         },
     },
-
     # --- Telegram Bots ---
     "aiogram": {
         "name": "aiogram",
@@ -465,10 +455,8 @@ def walk_repo(repo, path=""):
             item = contents.pop(0)
 
             if item.type == "dir":
-                try:
+                with suppress(Exception):
                     contents.extend(repo.get_contents(item.path))
-                except Exception:
-                    pass
             else:
                 files.append(item)
 
@@ -676,14 +664,16 @@ def print_profile(profile):
     for eco, techs in sorted(ecosystems.items()):
         print(f"\n── {eco} ──")
 
-        for tech_id, data in sorted(techs, key=lambda x: x[1]["repo_count"], reverse=True):
+        for _tech_id, data in sorted(techs, key=lambda x: x[1]["repo_count"], reverse=True):
             icon = status_icons.get(data["status"], "❓")
 
-            print(f"  {icon} {data['name']:<20} "
-                  f"repos: {data['repo_count']:<3} "
-                  f"files: {data['file_count']:<4} "
-                  f"commits: {data['commits']:<4} "
-                  f"{data['first_seen']} → {data['last_seen']}")
+            print(
+                f"  {icon} {data['name']:<20} "
+                f"repos: {data['repo_count']:<3} "
+                f"files: {data['file_count']:<4} "
+                f"commits: {data['commits']:<4} "
+                f"{data['first_seen']} → {data['last_seen']}"
+            )
 
     # Статистика
     total_techs = len(profile)
@@ -692,8 +682,9 @@ def print_profile(profile):
     declining = sum(1 for d in profile.values() if d["status"] == "declining")
 
     print(f"\n{'=' * 60}")
-    print(f"Total: {total_techs} technologies "
-          f"({active} active, {stale} stale, {declining} declining)")
+    print(
+        f"Total: {total_techs} technologies ({active} active, {stale} stale, {declining} declining)"
+    )
     print(f"{'=' * 60}\n")
 
 
