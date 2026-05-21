@@ -1,2 +1,10 @@
 PyGithub==2.1.1
 python-dotenv==1.0.1
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+ruff==0.3.0
+black==24.1.0
+mypy==1.8.0
+pytest==8.0.0
+pre-commit==3.6.0
