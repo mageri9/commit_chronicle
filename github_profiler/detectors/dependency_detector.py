@@ -8,8 +8,11 @@ Parses dependency files:
 - Cargo.toml (Rust)
 """
 
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class DependencyDetector:
@@ -45,18 +48,18 @@ class DependencyDetector:
                 continue
 
             # Extract package name (before ==, >=, <=, etc.)
-            pgk_name = re.split(r"[=<>!]", line)[0].strip().lower()
+            pkg_name = re.split(r"[=<>!]", line)[0].strip().lower()
 
             # Check against rules
             for tech_id, tech in self.rules.items():
                 deps = tech.get("dependencies", [])
-                if pgk_name in deps:
+                if pkg_name in deps:
                     detected.append(
                         {
                             "technology_id": tech_id,
                             "signal_type": "dependency",
                             "value": line,
-                            "dependency_name": pgk_name,
+                            "dependency_name": pkg_name,
                         }
                     )
 
@@ -73,11 +76,11 @@ class DependencyDetector:
 
             # Check dependencies and devDependencies
             deps = {}
-            deps.update(data("dependencies", {}))
-            deps.update(data("devDependencies", {}))
+            deps.update(data.get("dependencies", {}))
+            deps.update(data.get("devDependencies", {}))
 
-            for pgk_name in deps:
-                pgk_lower = pgk_name.lower()
+            for pkg_name in deps:
+                pgk_lower = pkg_name.lower()
 
                 for tech_id, tech in self.rules.items():
                     rule_deps = [d.lower() for d in tech.get("dependencies", [])]
@@ -86,13 +89,13 @@ class DependencyDetector:
                             {
                                 "technology_id": tech_id,
                                 "signal_type": "dependency",
-                                "value": f"{pgk_name}: {deps[pgk_name]}",
-                                "dependency_name": pgk_name,
+                                "value": f"{pkg_name}: {deps[pkg_name]}",
+                                "dependency_name": pkg_name,
                             }
                         )
 
-        except Exception as e:
-            print(e)
+        except Exception:
+            logger.exception("Failed to parse package.json")
 
         return detected
 

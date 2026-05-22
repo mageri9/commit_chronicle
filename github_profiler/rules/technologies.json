@@ -73,7 +73,8 @@
     ],
     "paths": [],
     "keywords": [
-      "Flask(__name__)"
+      "Flask(__name__)",
+      "flask.Flask"
     ]
   },
   "sqlalchemy": {

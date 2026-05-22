@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from github_profiler.domain import SignalType
+
 
 class Strength(Enum):
     """Evidence strength — deterministic categories only"""
@@ -22,8 +24,8 @@ class Evidence:
     """Normalized evidence for aggregation"""
 
     technology_id: str
-    signal_type: str
-    strength: Strength | None
+    signal_type: SignalType
+    strength: Strength
     repo: str
     file_path: str
     value: str
@@ -33,7 +35,7 @@ class Evidence:
         return {
             "technology_id": self.technology_id,
             "signal_type": self.signal_type,
-            "strength": self.strength,
+            "strength": self.strength.value,
             "repo": self.repo,
             "file_path": self.file_path,
             "value": self.value,

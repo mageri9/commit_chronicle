@@ -28,8 +28,6 @@ class DetectionEngine:
 
         self.rules_loader = RulesLoader(rules_path)
         self.rules = self.rules_loader.load()
-        self.rules_loader = RulesLoader(rules_path)
-        self.rules = self.rules_loader.load()
 
         self.path_detector = PathDetector(self.rules)
         self.import_detector = ImportDetector(self.rules)
@@ -67,9 +65,14 @@ class DetectionEngine:
                 continue
 
             signals = self.detect_file(file_path, content)
+
             for signal in signals:
-                signal["repo"] = file_info.get("repo", "unknown")
-                signal["file_path"] = file_path
-                all_signals.append(signal)
+                all_signals.append(
+                    {
+                        **signal,
+                        "repo": file_info.get("repo", "unknown"),
+                        "file_path": file_path,
+                    }
+                )
 
         return all_signals
