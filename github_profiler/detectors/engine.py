@@ -22,7 +22,12 @@ from .rules_loader import RulesLoader
 class DetectionEngine:
     """Orchestrates all detectors for a file"""
 
-    def __init__(self, rules_path: Path = Path("rules/technologies.json")):
+    def __init__(self, rules_path: Path | None = None):
+        if rules_path is None:
+            rules_path = Path(__file__).parent.parent / "rules" / "technologies.json"
+
+        self.rules_loader = RulesLoader(rules_path)
+        self.rules = self.rules_loader.load()
         self.rules_loader = RulesLoader(rules_path)
         self.rules = self.rules_loader.load()
 

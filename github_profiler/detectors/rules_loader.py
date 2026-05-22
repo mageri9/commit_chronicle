@@ -8,14 +8,22 @@ from typing import Any
 class RulesLoader:
     """Loads technology detection rules from JSON"""
 
-    def __init__(self, rules_path: Path = Path("rules/technologies.json")):
+    def __init__(self, rules_path: Path | None = None):
+        if rules_path is None:
+            current_dir = Path(__file__).parent.parent
+            rules_path = current_dir / "rules" / "technologies.json"
         self.rules_path = rules_path
         self._rules: dict[str, Any] | None = None
 
     def load(self) -> dict[str, Any]:
         """Load rules from JSON file"""
         if self._rules is None:
-            with open(self.rules_path) as f:
+            if not self.rules_path.exists():
+                raise FileNotFoundError(
+                    f"Rules file not found: {self.rules_path}\n"
+                    f"Expected at: {self.rules_path.absolute()}"
+                )
+            with open(self.rules_path, encoding="utf-8") as f:
                 self._rules = json.load(f)
         return self._rules
 
