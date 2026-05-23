@@ -5,9 +5,11 @@ from typing import Any
 from github import Github
 from github.Repository import Repository
 
+from github_profiler.aggregators import Normalizer
 from github_profiler.collectors.commits import CommitCollector
 from github_profiler.collectors.rate_limit import RateLimitManager
 from github_profiler.collectors.tree import TreeCollector
+from github_profiler.detectors import DetectionEngine
 from github_profiler.storage.cache import LocalCache
 
 
@@ -21,6 +23,8 @@ class CollectionPipeline:
         self.commit_collector = CommitCollector(github_client)
         self.cache = LocalCache()
         self.cache_ttl = cache_ttl_seconds
+        self.detection_engine = DetectionEngine()
+        self.normalizer = Normalizer()
 
     def collect_repo(self, repo: Repository, since_date: str) -> dict[str, Any]:
         """Collect all data for a single repository"""
@@ -49,12 +53,12 @@ class CollectionPipeline:
         user = self.client.get_user(username)
         repos = [r for r in user.get_repos() if not r.fork]
 
-        result = []
+        results = []
         for repo in repos:
             print(f"  📦 {repo.full_name}...", end=" ", flush=True)
             try:
                 data = self.collect_repo(repo, since_date)
-                result.append(data)
+                results.append(data)
                 print(
                     f"✅ {len(data['tree'].get('files', []))} files, "
                     f"{data['commits'].get('total_commits', 0)} commits"
@@ -62,20 +66,20 @@ class CollectionPipeline:
             except Exception as e:
                 print(f"❌ {e}")
 
-        return result
+        return results
 
+        # def process_to_evidence(self, username: str, since_date: str) -> list[Evidence]:
+        """Full pipeline: collect → detect → normalize → evidence"""
+        # raw_data = self.collect_user(username, since_date)
+        # all_evidences = []
 
-# ============================================================
-# PHASE 2 BOUNDARY
-# ============================================================
-# The code below is collection-only (Phase 1).
-#
-# Phase 2 will add:
-#   - evidence extraction from tree data
-#   - signal normalization
-#   - technology detection
-#   - activity aggregation
-#   - profile generation
-#
-# Do NOT add analytics/inference here.
-# ============================================================
+        # for repo_data in raw_data:
+        # repo_name = repo_data["repo"]
+        # tree_data = repo_data.get("tree", {})
+        # files = tree_data.get("files", [])
+
+        # Need file content for detection
+        # This requires fetching file contents (next phase)
+        # For now, placeholder
+
+        # return  all_evidences
