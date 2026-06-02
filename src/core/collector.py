@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 
 from src.core.normalizer import normalize
 from src.models import AnalysisResult
+from src.core.exceptions import (
+    RateLimitError,
+    TokenExhaustedError,
+    RepoAccessError,
+    CollectorError,
+)
+
 
 load_dotenv()
 
@@ -69,13 +76,19 @@ def process_single_repo(
 
     except RateLimitExceededException:
         safe_print("❌ Лимит API")
-        return "RATE_LIMIT"  # Специальный маркер для остановки
+        raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
+
     except GithubException as e:
+        if e.status in (403, 404):
+            safe_print(f"❌ Доступ запрещён ({e.status})")
+            raise RepoAccessError(repo.full_name, e.status)
+
         safe_print(f"❌ API: {e.status}")
-        return None
+        raise CollectorError(f"GitHub API error: {e.status}")
+
     except Exception as e:
-        safe_print(f"❌ {type(e).__name__}")
-        return None
+        safe_print(f"❌ {type(e).__name__}: {e}")
+        raise CollectorError(str(e))
 
 
 def collect_commits(
@@ -92,8 +105,15 @@ def collect_commits(
         rate_limit = g.get_rate_limit()
         remaining = rate_limit.core.remaining
         print(f"📡 API запросов осталось: {remaining}")
-    except:
-        pass
+
+        if remaining < 10:
+            raise TokenExhaustedError(
+                f"Осталось всего {remaining} запросов. Нужен новый токен."
+            )
+    except TokenExhaustedError:
+        raise
+    except Exception as e:
+        print(f"⚠️ Не удалось проверить лимиты: {e}")
 
     user = g.get_user(username)
 
@@ -124,13 +144,24 @@ def collect_commits(
         }
 
         for future in as_completed(futures):
-            result = future.result()
-            if result == "RATE_LIMIT":
-                print("\n⚠️ Обработка прервана из-за лимита API.")
+            try:
+                result = future.result()
+                if result:
+                    all_manifests.append(result)
+            except RateLimitError as e:
+                safe_print(f"\n⚠️ Лимит API. Ждать {e.retry_after}с.")
                 executor.shutdown(wait=False, cancel_futures=True)
                 break
-            elif result:
-                all_manifests.append(result)
+            except TokenExhaustedError as e:
+                safe_print(f"\n⚠️ {e}")
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
+            except RepoAccessError as e:
+                safe_print(f"⚠️ Пропущен: {e}")
+                continue
+            except CollectorError as e:
+                safe_print(f"⚠️ Ошибка: {e}")
+                continue
 
     return normalize(all_manifests, username)
 
