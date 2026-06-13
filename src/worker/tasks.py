@@ -25,7 +25,7 @@ async def analyze_github_user(
     Пайплайн анализа GitHub-пользователя.
     """
     request_id = ctx["job_id"]
-    period_end = datetime.now().strftime("%Y%m%d")
+    period_end = datetime.now().strftime("%Y-%m-%d")
     cache_key = f"github:{username}:{period_start}"
 
     # 1. Redis cache — самый быстрый путь
@@ -102,7 +102,6 @@ async def analyze_github_user(
         await update_request_status(request_id, "done", result_json=result_json)
         await cache_set(cache_key, result_json, ttl=settings.cache_ttl_github)
 
-        await asyncio.sleep(2)
         await publish(
             "job:done",
             json.dumps(
