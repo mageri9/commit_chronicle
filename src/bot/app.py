@@ -83,6 +83,69 @@ async def start_pubsub_listener(app: Application) -> None:
             pass  # Не ронять listener из-за одного сбойного сообщения
 
 
+async def catch_up_missed_events(app: Application) -> None:
+    """При старте бота: найти завершённые, но не отправленные уведомления."""
+    from src.storage.database import engine, requests
+    from sqlalchemy import select, and_
+
+    redis = await get_redis()
+
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            requests.select().where(
+                and_(
+                    requests.c.status.in_(["done", "failed"]),
+                    requests.c.notified == "false",
+                )
+            )
+        )
+        rows = result.fetchall()
+
+    for row in rows:
+        row_dict = dict(row._mapping)
+        job_id = row_dict["id"]
+
+        # Найти маппинг в Redis
+        mapping_raw = await redis.get(f"job_message:{job_id}")
+        if not mapping_raw:
+            continue
+
+        mapping = json.loads(mapping_raw)
+        chat_id = mapping["chat_id"]
+        message_id = mapping["message_id"]
+
+        if row_dict["status"] == "done" and row_dict.get("result_json"):
+            result = AnalysisResult.model_validate_json(row_dict["result_json"])
+            summary = format_summary(result)
+
+            await app.bot.edit_message_text(
+                summary, chat_id=chat_id, message_id=message_id
+            )
+
+            json_bytes = io.BytesIO(row_dict["result_json"].encode("utf-8"))
+            json_bytes.name = f"{mapping['username']}_analysis.json"
+            await app.bot.send_document(chat_id=chat_id, document=json_bytes)
+
+        elif row_dict["status"] == "failed":
+            error = row_dict.get("error_message", "неизвестная ошибка")
+            await app.bot.edit_message_text(
+                f"❌ {error}", chat_id=chat_id, message_id=message_id
+            )
+
+        # Пометить как отправленное
+        from src.storage.database import db_lock
+
+        async with db_lock:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    requests.update()
+                    .where(requests.c.id == job_id)
+                    .values(notified="true")
+                )
+
+        await redis.delete(f"job_message:{job_id}")
+
+
 def create_app() -> Application:
     """Создать и вернуть Application."""
     return Application.builder().token(settings.telegram_bot_token).build()
