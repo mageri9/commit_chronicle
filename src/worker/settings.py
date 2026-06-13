@@ -3,7 +3,7 @@
 """
 
 from src.worker.tasks import analyze_github_user
-from src.storage.database import init_db
+from src.storage.database import init_db, recover_stuck_requests
 from arq.connections import RedisSettings
 
 
@@ -23,6 +23,9 @@ class WorkerSettings:
     @staticmethod
     async def on_startup(ctx):
         await init_db()
+        recovered = await recover_stuck_requests()
+        if recovered:
+            print(f"♻️  Восстановлено зависших задач: {recovered}")
 
     @staticmethod
     async def on_shutdown(ctx):
