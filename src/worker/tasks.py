@@ -18,7 +18,9 @@ import json
 from src.models.models import AnalysisResult
 
 
-async def analyze_github_user(ctx, username: str, period_start: str) -> dict:
+async def analyze_github_user(
+    ctx, username: str, period_start: str, chat_id: str = ""
+) -> dict:
     """
     Пайплайн анализа GitHub-пользователя.
     """
@@ -34,6 +36,7 @@ async def analyze_github_user(ctx, username: str, period_start: str) -> dict:
             username=username,
             period_start=period_start,
             period_end=period_end,
+            chat_id=chat_id,
         )
         await update_request_status(request_id, "done", result_json=cached)
 
@@ -79,6 +82,7 @@ async def analyze_github_user(ctx, username: str, period_start: str) -> dict:
         username=username,
         period_start=period_start,
         period_end=period_end,
+        chat_id=chat_id,
     )
     await update_request_status(request_id, "processing")
 
