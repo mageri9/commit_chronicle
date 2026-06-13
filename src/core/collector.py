@@ -76,7 +76,8 @@ def process_single_repo(
             return None
 
     except RateLimitExceededException:
-        safe_print("❌ Лимит API")
+        token_rotator.block_token(g, duration=3600)
+        safe_print("❌ Лимит API — токен заблокирован на час")
         raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
 
     except GithubException as e:
@@ -151,10 +152,10 @@ def collect_commits(
                 result = future.result()
                 if result:
                     all_manifests.append(result)
-            except RateLimitError as e:
-                safe_print(f"\n⚠️ Лимит API. Ждать {e.retry_after}с.")
-                executor.shutdown(wait=False, cancel_futures=True)
-                break
+            except RateLimitExceededException:
+                token_rotator.block_token(g, duration=3600)
+                safe_print("❌ Лимит API — токен заблокирован на час")
+                raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
             except TokenExhaustedError as e:
                 safe_print(f"\n⚠️ {e}")
                 executor.shutdown(wait=False, cancel_futures=True)
