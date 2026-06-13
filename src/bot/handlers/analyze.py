@@ -11,6 +11,7 @@ from html import escape
 import re
 import json
 
+
 def validate_period(period: str) -> bool:
     """Проверить формат даты и что период не старше 2 лет."""
     try:
@@ -36,7 +37,9 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     period = context.args[1] if len(context.args) > 1 else "2024-01-01"
     if not validate_period(period):
-        await update.message.reply_text("❌ Максимальный период анализа — 2 года (YYYY-MM-DD)")
+        await update.message.reply_text(
+            "❌ Максимальный период анализа — 2 года (YYYY-MM-DD)"
+        )
         return
 
     msg = await update.message.reply_text(
@@ -78,4 +81,4 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
-        await msg.edit_text(f"❌ Ошибка: {e}")o
+        await msg.edit_text(f"❌ Ошибка: {e}")
