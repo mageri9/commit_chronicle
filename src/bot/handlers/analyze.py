@@ -4,8 +4,10 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 from src.bot.app import get_arq_pool
+from src.storage.cache import get_redis
 from html import escape
 import re
+import json
 
 
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -29,12 +31,25 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         pool = await get_arq_pool()
         job = await pool.enqueue_job("analyze_github_user", username.lower(), period)
 
+        redis = await get_redis()
+        await redis.setex(
+            f"{job.job_id}",
+            3600,  # TTL 1 час
+            json.dumps(
+                {
+                    "chat_id": update.effective_chat.id,
+                    "message_id": msg.message_id,
+                    "username": username,
+                    "period": period,
+                }
+            ),
+        )
+
         await msg.edit_text(
             f"🔄 Анализ запущен\n"
-            f"👤 {username}\n"
-            f"📅 с {period}\n"
-            f"🆔 `{job.job_id}`\n\n"
-            f"Статус: /status_{job.job_id}",
+            f"👤 {escape(username)}\n"
+            f"📅 с {escape(period)}\n"
+            f"🆔 <code>{job.job_id}</code>",
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
