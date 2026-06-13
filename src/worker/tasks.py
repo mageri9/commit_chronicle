@@ -98,6 +98,7 @@ async def analyze_github_user(ctx, username: str, period_start: str) -> dict:
         await update_request_status(request_id, "done", result_json=result_json)
         await cache_set(cache_key, result_json, ttl=settings.cache_ttl_github)
 
+        await asyncio.sleep(2)
         await publish(
             "job:done",
             json.dumps(

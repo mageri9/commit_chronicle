@@ -1,5 +1,6 @@
 """Фабрика Telegram-приложения."""
 
+import asyncio
 import json
 import io
 from telegram.ext import Application
@@ -36,8 +37,17 @@ async def start_pubsub_listener(app: Application) -> None:
             status = data["status"]
 
             # Найти маппинг в Redis
-            mapping_raw = await redis.get(f"job_message:{job_id}")
+            key = f"job_message:{job_id}"
+
+            mapping_raw = None
+
+            for _ in range(10):
+                mapping_raw = await redis.get(key)
+                if mapping_raw:
+                    break
+                await asyncio.sleep(0.1)
             if not mapping_raw:
+                print(f"⚠️ Mapping not found after retry: {key}")
                 continue
 
             mapping = json.loads(mapping_raw)
@@ -79,8 +89,8 @@ async def start_pubsub_listener(app: Application) -> None:
             # Удалить маппинг после обработки
             await redis.delete(f"job_message:{job_id}")
 
-        except Exception:
-            pass  # Не ронять listener из-за одного сбойного сообщения
+        except Exception as e:
+            print(f"⚠️ Listener error: {e}")  #  временно
 
 
 async def catch_up_missed_events(app: Application) -> None:

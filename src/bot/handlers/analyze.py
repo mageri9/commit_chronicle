@@ -1,5 +1,7 @@
 """Обработчик /analyze @username [period]."""
 
+import uuid
+
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -29,20 +31,27 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     try:
         pool = await get_arq_pool()
-        job = await pool.enqueue_job("analyze_github_user", username.lower(), period)
+        job_id = str(uuid.uuid4())
 
         redis = await get_redis()
-        await redis.setex(
-            f"{job.job_id}",
-            3600,  # TTL 1 час
-            json.dumps(
-                {
-                    "chat_id": update.effective_chat.id,
-                    "message_id": msg.message_id,
-                    "username": username,
-                    "period": period,
-                }
-            ),
+
+        mapping = {
+            "chat_id": int(update.effective_chat.id),
+            "message_id": int(msg.message_id),
+            "username": str(username),
+            "period": str(period),
+        }
+
+        await redis.setex(f"job_message:{job_id}", 3600, json.dumps(mapping))
+
+        job = await pool.enqueue_job(
+            "analyze_github_user",
+            username.lower(),
+            period,
+            _job_id=job_id,
+        )
+        print(
+            "MAPPING SAVED", job.job_id, await redis.exists(f"job_message:{job.job_id}")
         )
 
         await msg.edit_text(
