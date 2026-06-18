@@ -15,7 +15,7 @@ from src.storage.database import (
 from src.storage.cache import cache_get, cache_set
 from src.storage.pubsub import publish
 import json
-from src.models.models import AnalysisResult
+from src.models.models import AnalysisResult, to_compact, serialize_result
 
 
 async def analyze_github_user(
@@ -98,7 +98,7 @@ async def analyze_github_user(
         )
 
         # 5. Успех — сохранить
-        result_json = result.model_dump_json()
+        result_json = serialize_result(result)
         await update_request_status(request_id, "done", result_json=result_json)
         await cache_set(cache_key, result_json, ttl=settings.cache_ttl_github)
 
@@ -139,24 +139,21 @@ async def analyze_github_user(
         raise
 
 
-def format_summary(result: AnalysisResult) -> str:
+def format_summary(result_json: str) -> str:
     """Собрать текстовую сводку из результатов анализа."""
-    total_commits = len(result.commits)
-    repos = sorted(set(c.repo for c in result.commits))
+    data = json.loads(result_json)
 
-    # Языки по расширениям файлов
-    languages: dict[str, int] = {}
-    for commit in result.commits:
-        for f in commit.files:
-            ext = f.filename.rsplit(".", 1)[-1] if "." in f.filename else "other"
-            languages[ext] = languages.get(ext, 0) + 1
+    if "repos" in data:
+        total_commits = sum(len(commits) for commits in data["repos"].values())
+        repo_count = len(data["repos"])
+    else:
+        total_commits = len(data["commits"])
+        repo_count = len(set(c["repo"] for c in data["commits"])
 
-    top_langs = sorted(languages.items(), key=lambda x: x[1], reverse=True)[:5]
-    lang_line = ", ".join(f"{ext}({count})" for ext, count in top_langs)
+
 
     return (
         f"✅ Анализ готов\n"
         f"📦 Коммитов: {total_commits}\n"
-        f"📁 Репозиториев: {len(repos)}\n"
-        f"🔤 Языки: {lang_line}"
+        f"📁 Репозиториев: {repo_count}\n"
     )

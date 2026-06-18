@@ -93,3 +93,9 @@ def to_compact(result: AnalysisResult) -> CompactResult:
         period=result.period,
         repos=repos,
     )
+
+
+def serialize_result(result: AnalysisResult) -> str:
+    """Конвертировать AnalysisResult в компактный JSON."""
+    compact = to_compact(result)
+    return compact.model_dump_json(by_alias=True, exclude_none=True)
