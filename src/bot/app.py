@@ -10,7 +10,6 @@ from src.config import settings
 from src.storage.database import get_request
 from src.storage.pubsub import subscribe
 from src.storage.cache import get_redis
-from src.models.models import AnalysisResult
 from src.worker.tasks import format_summary
 
 _arq_pool = None
@@ -124,8 +123,7 @@ async def catch_up_missed_events(app: Application) -> None:
         message_id = mapping["message_id"]
 
         if row_dict["status"] == "done" and row_dict.get("result_json"):
-            result = AnalysisResult.model_validate_json(row_dict["result_json"])
-            summary = format_summary(result)
+            summary = format_summary(row_dict["result_json"])
 
             await app.bot.edit_message_text(
                 summary, chat_id=chat_id, message_id=message_id
