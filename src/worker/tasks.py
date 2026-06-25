@@ -46,39 +46,48 @@ async def analyze_github_user(
             }
         # Дедуп
         if existing["status"] == "done":
-            await create_request(
-                request_id=request_id,
-                username=username,
-                period_start=period_start,
-                period_end=period_end,
-                chat_id=chat_id,
+            loop = asyncio.get_running_loop()
+            current_fp = await loop.run_in_executor(
+                None,
+                get_github_fingerprint,
+                username,
             )
 
-            await update_request_status(
-                request_id,
-                "done",
-                result_json=existing["result_json"],
-                fingerprint=existing.get("fingerprint"),
-            )
+            if current_fp and current_fp == existing.get("fingerprint"):
+                # Данные свежие
+                await create_request(
+                    request_id=request_id,
+                    username=username,
+                    period_start=period_start,
+                    period_end=period_end,
+                    chat_id=chat_id,
+                )
 
-            await publish(
-                "job:done",
-                json.dumps(
-                    {
-                        "job_id": request_id,
-                        "status": "done",
-                        "username": username,
-                    }
-                ),
-            )
+                await update_request_status(
+                    request_id,
+                    "done",
+                    result_json=existing["result_json"],
+                    fingerprint=existing.get("fingerprint"),
+                )
 
-            return {
-                "status": "done",
-                "request_id": request_id,
-                "source": "dedup",
-                "result_json": existing["result_json"],
-            }
-        logger.info("Данные устарели (fingerprint), пересобираем")
+                await publish(
+                    "job:done",
+                    json.dumps(
+                        {
+                            "job_id": request_id,
+                            "status": "done",
+                            "username": username,
+                        }
+                    ),
+                )
+
+                return {
+                    "status": "done",
+                    "request_id": request_id,
+                    "source": "dedup",
+                    "result_json": existing["result_json"],
+                }
+            logger.info("Данные устарели (fingerprint), пересобираем")
 
     # 2. Новый запрос — создать и запустить collector
     await create_request(
