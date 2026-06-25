@@ -8,9 +8,9 @@ import os
 import sys
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 from github import GithubException, RateLimitExceededException
 from dotenv import load_dotenv
+from src.logger import get_logger
 
 from src.core.normalizer import normalize
 from src.core.token_rotator import token_rotator
@@ -25,13 +25,7 @@ from src.core.exceptions import (
 
 load_dotenv()
 
-print_lock = Lock()
-
-
-def safe_print(*args, **kwargs):
-    """Потокобезопасный print"""
-    with print_lock:
-        print(*args, **kwargs)
+logger = get_logger(__name__)
 
 
 def process_single_repo(
@@ -39,7 +33,7 @@ def process_single_repo(
 ) -> dict | None:
     """Обрабатывает один репозиторий (для параллельного выполнения)"""
 
-    safe_print(f"[{index}/{total}] 📁 {repo.full_name}...", end=" ", flush=True)
+    logger.info(f"[{index}/{total}] 📁 {repo.full_name}...", end=" ", flush=True)
 
     try:
         commits_manifest = []
@@ -65,31 +59,26 @@ def process_single_repo(
             commits_manifest.append(manifest)
 
         if commits_manifest:
-            safe_print(f"✅ {len(commits_manifest)} коммитов")
+            logger.info(f"✅ {len(commits_manifest)} коммитов")
             return {
                 "repo": repo.full_name,
                 "period": f"{since_date}..{datetime.now().strftime('%Y-%m-%d')}",
                 "commits": commits_manifest,
             }
         else:
-            safe_print("⏭️ нет коммитов")
+            logger.info("⏭️ нет коммитов")
             return None
-
-    except RateLimitExceededException:
-        token_rotator.block_token(g, duration=3600)
-        safe_print("❌ Лимит API — токен заблокирован на час")
-        raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
 
     except GithubException as e:
         if e.status in (403, 404):
-            safe_print(f"❌ Доступ запрещён ({e.status})")
+            logger.warning(f"❌ Доступ запрещён ({e.status})")
             raise RepoAccessError(repo.full_name, e.status)
 
-        safe_print(f"❌ API: {e.status}")
+        logger.warning(f"❌ API: {e.status}")
         raise CollectorError(f"GitHub API error: {e.status}")
 
     except Exception as e:
-        safe_print(f"❌ {type(e).__name__}: {e}")
+        logger.warning(f"❌ {type(e).__name__}: {e}")
         raise CollectorError(str(e))
 
 
@@ -154,17 +143,17 @@ def collect_commits(
                     all_manifests.append(result)
             except RateLimitExceededException:
                 token_rotator.block_token(g, duration=3600)
-                safe_print("❌ Лимит API — токен заблокирован на час")
+                logger.warning("❌ Лимит API — токен заблокирован на час")
                 raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
             except TokenExhaustedError as e:
-                safe_print(f"\n⚠️ {e}")
+                logger.warning(f"\n⚠️ {e}")
                 executor.shutdown(wait=False, cancel_futures=True)
                 break
             except RepoAccessError as e:
-                safe_print(f"⚠️ Пропущен: {e}")
+                logger.warning(f"⚠️ Пропущен: {e}")
                 continue
             except CollectorError as e:
-                safe_print(f"⚠️ Ошибка: {e}")
+                logger.warning(f"⚠️ Ошибка: {e}")
                 continue
 
     return normalize(all_manifests, username)
