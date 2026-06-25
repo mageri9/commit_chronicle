@@ -6,3 +6,4 @@ pydantic-settings==2.14.1
 sqlalchemy
 redis
 arq
+loguru==0.7.3
