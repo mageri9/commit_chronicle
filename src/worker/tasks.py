@@ -36,7 +36,22 @@ async def analyze_github_user(
                 "source": "existing_request",
                 "result_json": None,
             }
+        # Дедуп
         if existing["status"] == "done":
+            await create_request(
+                request_id=request_id,
+                username=username,
+                period_start=period_start,
+                period_end=period_end,
+                chat_id=chat_id,
+            )
+
+            await update_request_status(
+                request_id,
+                "done",
+                result_json=existing["result_json"],
+            )
+
             await publish(
                 "job:done",
                 json.dumps(
@@ -47,10 +62,11 @@ async def analyze_github_user(
                     }
                 ),
             )
+
             return {
                 "status": "done",
-                "request_id": existing["id"],
-                "source": "deduplicated",
+                "request_id": request_id,
+                "source": "dedup",
                 "result_json": existing["result_json"],
             }
 

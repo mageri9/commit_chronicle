@@ -2,6 +2,9 @@
 
 import redis.asyncio as aioredis
 from src.config import settings
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 _client: aioredis.Redis | None = None
@@ -26,6 +29,7 @@ async def publish(channel: str, message: str) -> None:
     except Exception:
         pass
 
+
 async def subscribe(channel: str):
     """Подписаться на канал. Async generator — отдаёт сообщения."""
     try:
@@ -36,5 +40,6 @@ async def subscribe(channel: str):
         async for msg in pubsub.listen():
             if msg["type"] == "message":
                 yield msg["data"]
+            logger.debug(f"Получено pubsub: {msg['data']}")
     except Exception:
         pass
