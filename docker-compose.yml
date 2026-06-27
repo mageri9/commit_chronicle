@@ -13,6 +13,8 @@ services:
     command: arq src.worker.settings.WorkerSettings
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
@@ -26,6 +28,8 @@ services:
     command: python -m src.bot.main
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
