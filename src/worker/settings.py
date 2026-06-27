@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 class WorkerSettings:
     functions = [analyze_github_user]
 
-    redis_settings = settings.redis_url
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
 
     max_jobs = 3
     job_timeout = 300

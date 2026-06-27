@@ -21,10 +21,10 @@ _arq_pool = None
 async def get_arq_pool():
     """Ленивое подключение к Redis для arq."""
     global _arq_pool
+
     if _arq_pool is None:
-        _arq_pool = await create_pool(
-            RedisSettings(host="localhost", port=6379, database=0)
-        )
+        _arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+
     return _arq_pool
 
 
