@@ -3,24 +3,20 @@
 """
 
 import asyncio
+import json
 from datetime import datetime
-from src.logger import get_logger
-
 
 from src.config import settings
 from src.core.collector import collect_commits
-from src.core.token_rotator import token_rotator
-from src.models import AnalysisResult
+from src.core.fingerprint import get_github_fingerprint
+from src.models.models import serialize_result
 from src.storage.database import (
     create_request,
-    update_request_status,
     find_existing_requests,
+    update_request_status,
 )
 from src.storage.pubsub import publish
-import json
-from src.models.models import serialize_result
-from src.core.fingerprint import get_github_fingerprint
-
+from src.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -30,23 +26,49 @@ async def analyze_github_user(
 ) -> dict:
     """
     Пайплайн анализа GitHub-пользователя.
+
+    Шаги:
+        1. Дедупликация — проверить существующий запрос в БД.
+        2. Fingerprint-проверка — если есть done-запрос, сравнить SHA256.
+        3. Создать новый запрос и запустить collector.
+        4. Сохранить результат и уведомить бота через pub/sub.
     """
     request_id = ctx["job_id"]
+    # period_end фиксируется в момент старта задачи и используется
+    # как правая граница периода анализа, а не как время завершения.
     period_end = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Existing request — уже анализировали или анализируем
+    if not chat_id:
+        logger.warning(f"[{request_id}] chat_id пустой — уведомление не дойдёт")
+
+    loop = asyncio.get_running_loop()
+
+    # 1. Дедупликация — уже анализировали или анализируем?
     existing = await find_existing_requests(username, period_start, period_end)
     if existing:
         if existing["status"] == "processing":
+            # Задача уже в очереди — уведомить бота, чтобы он мог
+            # сообщить пользователю вместо молчаливого игнора.
+            await publish(
+                "job:done",
+                json.dumps(
+                    {
+                        "job_id": existing["id"],
+                        "status": "processing",
+                        "username": username,
+                    }
+                ),
+            )
             return {
                 "status": "processing",
                 "request_id": existing["id"],
                 "source": "existing_request",
                 "result_json": None,
             }
-        # Дедуп
+
         if existing["status"] == "done":
-            loop = asyncio.get_running_loop()
+            # Fingerprint берём до сборки — это «слепок» состояния репо
+            # на момент проверки кэша, а не после тяжёлого collect_commits.
             current_fp = await loop.run_in_executor(
                 None,
                 get_github_fingerprint,
@@ -54,7 +76,7 @@ async def analyze_github_user(
             )
 
             if current_fp and current_fp == existing.get("fingerprint"):
-                # Данные свежие
+                # Данные свежие — отдать кэш
                 await create_request(
                     request_id=request_id,
                     username=username,
@@ -62,14 +84,12 @@ async def analyze_github_user(
                     period_end=period_end,
                     chat_id=chat_id,
                 )
-
                 await update_request_status(
                     request_id,
                     "done",
                     result_json=existing["result_json"],
-                    fingerprint=existing.get("fingerprint"),
+                    fingerprint=current_fp,
                 )
-
                 await publish(
                     "job:done",
                     json.dumps(
@@ -80,16 +100,16 @@ async def analyze_github_user(
                         }
                     ),
                 )
-
                 return {
                     "status": "done",
                     "request_id": request_id,
                     "source": "dedup",
                     "result_json": existing["result_json"],
                 }
-            logger.info("Данные устарели (fingerprint), пересобираем")
 
-    # 2. Новый запрос — создать и запустить collector
+            logger.info(f"[{request_id}] Fingerprint изменился — пересобираем данные")
+
+    # 2. Новый запрос — зарегистрировать в БД
     await create_request(
         request_id=request_id,
         username=username,
@@ -99,9 +119,16 @@ async def analyze_github_user(
     )
     await update_request_status(request_id, "processing")
 
-    # 3. Запустить collector в отдельном потоке
+    # 3. Fingerprint фиксируем ДО сборки — отражает состояние репо на старте.
+    #    После collect_commits репо могут обновиться, и fingerprint устареет.
+    fingerprint = await loop.run_in_executor(
+        None,
+        get_github_fingerprint,
+        username,
+    )
+
+    # 4. Запустить collector в ThreadPoolExecutor (синхронный PyGithub)
     try:
-        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             collect_commits,
@@ -110,14 +137,8 @@ async def analyze_github_user(
             settings.max_workers,
         )
 
-        # 4. Успех — сохранить
+        # 5. Успех — сохранить результат и уведомить бота
         result_json = serialize_result(result)
-
-        fingerprint = await loop.run_in_executor(
-            None,
-            get_github_fingerprint,
-            username,
-        )
 
         await update_request_status(
             request_id,
@@ -125,7 +146,6 @@ async def analyze_github_user(
             result_json=result_json,
             fingerprint=fingerprint,
         )
-
         await publish(
             "job:done",
             json.dumps(
@@ -136,7 +156,6 @@ async def analyze_github_user(
                 }
             ),
         )
-
         return {
             "status": "done",
             "request_id": request_id,
@@ -144,10 +163,11 @@ async def analyze_github_user(
             "result_json": result_json,
         }
 
-    # 6. Ошибка — зафиксировать
+    # 6. Ошибка — зафиксировать и уведомить бота
     except Exception as e:
-        await update_request_status(request_id, "failed", error_message=str(e))
+        logger.exception(f"[{request_id}] Ошибка сборки для {username}: {e}")
 
+        await update_request_status(request_id, "failed", error_message=str(e))
         await publish(
             "job:done",
             json.dumps(
@@ -159,20 +179,19 @@ async def analyze_github_user(
                 }
             ),
         )
-
         raise
 
 
 def format_summary(result_json: str) -> str:
-    """Собрать текстовую сводку из результатов анализа."""
-    data = json.loads(result_json)
+    """
+    Собрать текстовую сводку из результатов анализа.
 
-    if "repos" in data:
-        total_commits = sum(len(commits) for commits in data["repos"].values())
-        repo_count = len(data["repos"])
-    else:
-        total_commits = len(data["commits"])
-        repo_count = len(set(c["repo"] for c in data["commits"]))
+    Ожидает формат CompactResult: {"repos": {"repo_name": [commits...]}, ...}
+    """
+    data = json.loads(result_json)
+    repos: dict = data.get("repos", {})
+    total_commits = sum(len(commits) for commits in repos.values())
+    repo_count = len(repos)
 
     return (
         f"✅ Анализ готов\n"
