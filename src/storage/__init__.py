@@ -5,6 +5,9 @@ from src.storage.database import (
     create_request,
     update_request_status,
     get_request,
+    get_user_binding,
+    set_user_binding,
+    remove_user_binding,
 )
 from src.storage.cache import cache_get, cache_set
 
@@ -16,4 +19,7 @@ __all__ = [
     "get_request",
     "cache_get",
     "cache_set",
+    "get_user_binding",
+    "set_user_binding",
+    "remove_user_binding",
 ]
