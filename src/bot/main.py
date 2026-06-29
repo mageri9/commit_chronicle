@@ -3,11 +3,11 @@
 import asyncio
 from html import escape
 
-from telegram.constants import ParseMode
 from telegram.ext import CommandHandler, MessageHandler, filters
 from src.bot.app import create_app, catch_up_missed_events, start_pubsub_listener
 from src.bot.handlers.analyze import analyze_command
 from src.bot.handlers.status import status_handler
+from src.bot.handlers.menu import menu_message_handler
 from src.storage import get_user_binding
 from src.bot.keyboards import get_main_keyboard
 
@@ -30,6 +30,7 @@ async def start(update, context) -> None:
             f"Помогу собрать статистику коммитов, измененных строк и сгенерировать инсайты.\n\n"
             f"Нажми кнопку ниже, чтобы привязать свой профиль, или просто пришли мне ссылку/юзернейм."
         )
+
     reply_markup = get_main_keyboard(username)
     await update.message.reply_text(
         text,
@@ -50,6 +51,10 @@ def main():
     app.add_handler(CommandHandler("analyze", analyze_command))
     app.add_handler(
         MessageHandler(filters.Regex(r"^/status(_\S+)?(\s+\S+)?$"), status_handler)
+    )
+    # Регистрируем обработчик текстовых сообщений меню и парсера
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, menu_message_handler)
     )
 
     app.post_init = on_startup
