@@ -1,35 +1,46 @@
 services:
   redis:
     image: redis:7-alpine
+    container_name: chronicle_redis
     restart: unless-stopped
+    command: redis-server --appendonly yes
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
+    volumes:
+      - chronicle_redis_data:/data
+    networks:
+      - chronicle_net
 
   worker:
-    build: .
+    image: ghcr.io/mageri9/commit_chronicle:latest
+    container_name: chronicle_worker
     command: arq src.worker.settings.WorkerSettings
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://chronicle_redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    restart: unless-stopped
+    networks:
+      - chronicle_net
 
   bot:
-    build: .
+    image: ghcr.io/mageri9/commit_chronicle:latest
+    container_name: chronicle_bot
     command: python -m src.bot.main
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://chronicle_redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
@@ -38,4 +49,12 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    restart: unless-stopped
+    networks:
+      - chronicle_net
+
+volumes:
+  chronicle_redis_data:
+
+networks:
+  chronicle_net:
+    driver: bridge
