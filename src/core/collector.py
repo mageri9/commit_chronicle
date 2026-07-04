@@ -85,10 +85,6 @@ def process_single_repo(
 def collect_commits(
     username: str, since_date: str, max_workers: int = 10
 ) -> AnalysisResult:
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        raise ValueError("GITHUB_TOKEN not found")
-
     g = token_rotator.get_client()
 
     # Проверяем лимиты
