@@ -2,7 +2,6 @@
 
 import uuid
 from datetime import datetime, timedelta
-import re
 import json
 from html import escape
 
@@ -11,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src.bot.app import get_arq_pool
+from src.core import clean_github_username, validate_github_username
 from src.storage.cache import get_redis
 from src.storage import (
     acquire_job_lock,
@@ -128,12 +128,10 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("ℹ️ Укажи GitHub-юзернейм: /analyze @username")
         return
 
-    username = context.args[0].lstrip("@").strip()
-    if not re.fullmatch(r"^[a-zA-Z0-9_-]+$", username):
+    username = clean_github_username(context.args[0])
+    if not validate_github_username(username):
         await update.message.reply_text("❌ Некорректный GitHub username")
         return
-
-    username = username.lower()
 
     period = context.args[1] if len(context.args) > 1 else get_default_period()
     if not validate_period(period):
