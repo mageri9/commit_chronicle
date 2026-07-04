@@ -1,6 +1,7 @@
 """Fingerprint текущего состояния GitHub пользователя."""
 
 import hashlib
+import itertools
 from src.core.token_rotator import token_rotator
 
 
@@ -13,7 +14,7 @@ def get_github_fingerprint(username: str) -> str:
 
     try:
         user = g.get_user(username)
-        repos = list(user.get_repos(type="owner"))[:100]  # защита от 800 репо
+        repos = list(itertools.islice(user.get_repos(type="owner"), 100))
     except Exception:
         return ""
 
