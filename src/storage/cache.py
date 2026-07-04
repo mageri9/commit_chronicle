@@ -25,7 +25,7 @@ async def cache_set(key: str, value: str, ttl: int = 3600) -> None:
         logger.warning(f"cache_set({key!r}) failed: {e}")
 
 
-async def acquire_job_lock(chat_id: str, job_id: str, ttl: int = 300) -> bool:
+async def acquire_job_lock(chat_id: str, job_id: str, ttl: int = 600) -> bool:
     """Пытается захватить блокировку на параллельное выполнение задачи.
 
     Использует атомарную команду SET NX. Возвращает True в случае успеха,
