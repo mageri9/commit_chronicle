@@ -10,7 +10,7 @@ from telegram.ext import ContextTypes
 from src.core import clean_github_username, validate_github_username
 from src.storage import set_user_binding, remove_user_binding
 from src.bot.keyboards import get_main_keyboard
-from src.bot.handlers.analyze import start_analysis_job, DEFAULT_PERIOD
+from src.bot.handlers.analyze import start_analysis_job, get_default_period
 
 
 async def menu_message_handler(
@@ -72,7 +72,7 @@ async def menu_message_handler(
     if my_analysis_match:
         username = my_analysis_match.group(1).lower()
         context.user_data.pop("state", None)
-        await start_analysis_job(update, username, DEFAULT_PERIOD)
+        await start_analysis_job(update, username, get_default_period())
         return
 
     # 6. Умный парсер входящего текста ( Concept 1 + Concept 2 Hybrid )
@@ -98,4 +98,4 @@ async def menu_message_handler(
             parse_mode=ParseMode.HTML,
         )
     else:
-        await start_analysis_job(update, cleaned, DEFAULT_PERIOD)
+        await start_analysis_job(update, cleaned, get_default_period())

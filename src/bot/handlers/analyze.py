@@ -26,9 +26,12 @@ logger = get_logger(__name__)
 
 
 MAX_ANALYSIS_DAYS = 730
-DEFAULT_PERIOD = (datetime.now() - timedelta(days=MAX_ANALYSIS_DAYS)).strftime(
-    "%Y-%m-%d"
-)
+
+
+def get_default_period() -> str:
+    """Дата начала периода по умолчанию — вычисляется на момент вызова,
+    а не один раз при импорте модуля."""
+    return (datetime.now() - timedelta(days=MAX_ANALYSIS_DAYS)).strftime("%Y-%m-%d")
 
 
 def validate_period(period: str) -> bool:
@@ -132,7 +135,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     username = username.lower()
 
-    period = context.args[1] if len(context.args) > 1 else DEFAULT_PERIOD
+    period = context.args[1] if len(context.args) > 1 else get_default_period()
     if not validate_period(period):
         await update.message.reply_text(
             "❌ Максимальный период анализа — 2 года (YYYY-MM-DD)"
