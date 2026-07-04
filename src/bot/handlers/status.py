@@ -26,7 +26,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Проверка владельца
-    if record.get("chat_id") and record["chat_id"] != str(update.effective_chat.id):
+    if record.get("chat_id") != str(update.effective_chat.id):
         await update.message.reply_text("❌ Нет доступа к этому анализу.")
         return
 
