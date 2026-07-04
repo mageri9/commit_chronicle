@@ -33,7 +33,7 @@ def process_single_repo(
 ) -> dict | None:
     """Обрабатывает один репозиторий (для параллельного выполнения)"""
 
-    logger.info(f"[{index}/{total}] 📁 {repo.full_name}...", end=" ", flush=True)
+    logger.info(f"[{index}/{total}] 📁 Начало обработки {repo.full_name}")
 
     try:
         commits_manifest = []
@@ -59,26 +59,34 @@ def process_single_repo(
             commits_manifest.append(manifest)
 
         if commits_manifest:
-            logger.info(f"✅ {len(commits_manifest)} коммитов")
+            logger.info(
+                f"[{index}/{total}] 📁 {repo.full_name}: ✅ Найдено коммитов: {len(commits_manifest)}"
+            )
             return {
                 "repo": repo.full_name,
                 "period": f"{since_date}..{datetime.now().strftime('%Y-%m-%d')}",
                 "commits": commits_manifest,
             }
         else:
-            logger.info("⏭️ нет коммитов")
+            logger.info(f"[{index}/{total}] 📁 {repo.full_name}: ⏭️ Нет коммитов")
             return None
 
     except GithubException as e:
         if e.status in (403, 404):
-            logger.warning(f"❌ Доступ запрещён ({e.status})")
+            logger.warning(
+                f"[{index}/{total}] 📁 {repo.full_name}: ❌ Доступ запрещён ({e.status})"
+            )
             raise RepoAccessError(repo.full_name, e.status)
 
-        logger.warning(f"❌ API: {e.status}")
+        logger.warning(
+            f"[{index}/{total}] 📁 {repo.full_name}: ❌ Ошибка API {e.status}"
+        )
         raise CollectorError(f"GitHub API error: {e.status}")
 
     except Exception as e:
-        logger.warning(f"❌ {type(e).__name__}: {e}")
+        logger.warning(
+            f"[{index}/{total}] 📁 {repo.full_name}: ❌ {type(e).__name__}: {e}"
+        )
         raise CollectorError(str(e))
 
 
@@ -90,7 +98,6 @@ def collect_commits(
     # Проверяем лимиты
     try:
         rate_limit = g.get_rate_limit()
-
         remaining = rate_limit.resources.core.remaining
 
         logger.info(f"📡 API запросов осталось: {remaining}")
