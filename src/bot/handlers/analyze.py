@@ -37,8 +37,9 @@ def get_default_period() -> str:
 def validate_period(period: str) -> bool:
     try:
         date = datetime.strptime(period, "%Y-%m-%d").date()
+        today = datetime.now().date()
         max_age = (datetime.now() - timedelta(days=MAX_ANALYSIS_DAYS)).date()
-        return date >= max_age
+        return max_age <= date <= today
     except ValueError:
         return False
 
