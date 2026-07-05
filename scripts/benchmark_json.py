@@ -4,10 +4,10 @@
 Цель: помочь подобрать параметры (msg_limit, включать ли files)
 чтобы укладываться в контекстное окно LLM.
 
-Использование:
-    python benchmark_json.py                  # последняя запись из БД
-    python benchmark_json.py --id <job_id>    # конкретная запись
-    python benchmark_json.py --limit 8000     # показать что влезает в 8k токенов
+Использование (из корня репозитория):
+    python scripts/benchmark_json.py                  # последняя запись из БД
+    python scripts/benchmark_json.py --id <job_id>    # конкретная запись
+    python scripts/benchmark_json.py --limit 8000     # показать что влезает в 8k токенов
 """
 
 import argparse
@@ -22,10 +22,6 @@ from src.models.models import (
     deserialize_result,
 )
 from src.storage.database import engine, requests
-
-# "from" зарезервирован в Python, в модели называется from_.
-# Хардкодим здесь — бенчмарк локальная утилита, не продакшн-код.
-_FROM_KEY = "from"
 
 # Ключ "from" зарезервирован в Python, в модели называется from_.
 # Хардкодим здесь — бенчмарк локальная утилита, не продакшн-код.

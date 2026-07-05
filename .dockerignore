@@ -28,7 +28,7 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Tests & temp
-test_worker.py
-check_mapping.py
-benchmark_json.py
+# Tests & dev-only scripts
+tests/
+scripts/
+docs/
