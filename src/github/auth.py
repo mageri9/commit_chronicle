@@ -180,6 +180,19 @@ class TokenPool:
             state.blocked_until = time.time() + duration
             state.blocked_reason = reason
 
+    async def peek(self, token: str, api: ApiKind) -> tuple[int | None, float]:
+        """
+        Известное (возможно устаревшее) remaining/reset_at для конкретного
+        токена без влияния на выбор — используется RateLimiter'ом, чтобы
+        решить, стоит ли ждать перед запросом этим токеном.
+        """
+        async with self._lock:
+            state = self._states.get(token)
+            if state is None:
+                return None, 0.0
+            window = state.window(api)
+            return window.remaining, window.reset_at
+
     def snapshot(self) -> dict[str, dict]:
         """
         Текущее состояние всех токенов для логов/дебага.
