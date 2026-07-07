@@ -10,6 +10,7 @@ github.get_commit_history(), github.enrich_with_details()".
 """
 
 from __future__ import annotations
+from loguru import logger
 
 from collections.abc import AsyncIterator
 
@@ -66,13 +67,15 @@ class GitHubService:
         из-за раннего break или исключения у вызывающего кода не попадёт
         в кеш как будто это полная история.
         """
-        cached = await get_cached_history(repo, since=since)
+        author_id = await self._resolve_user_id(repo.owner)
+        logger.info(f"🔑 author_id для {repo.owner} = {author_id!r}")
+        # временно, для диагностики — убрать после подтверждения фикса
+
+        cached = await get_cached_history(repo, author_id=author_id, since=since)
         if cached is not None:
             for header in cached:
                 yield header
             return
-
-        author_id = await self._resolve_user_id(repo.owner)
 
         headers: list[CommitHeader] = []
         async for header in _get_commit_history(
@@ -83,7 +86,7 @@ class GitHubService:
             headers.append(header)
             yield header
 
-        await set_cached_history(repo, headers, since=since)
+        await set_cached_history(repo, headers, author_id=author_id, since=since)
 
     async def enrich_with_details(
         self, repo: Repository, header: CommitHeader

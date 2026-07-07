@@ -29,12 +29,12 @@ logger = get_logger(__name__)
 _KEY_PREFIX = "ghcache:commits"
 
 
-def _cache_key(repo: Repository, since: str | None) -> str:
-    return f"{_KEY_PREFIX}:{repo.full_name}:{since or 'all'}"
+def _cache_key(repo: Repository, since: str | None, author_id: str) -> str:
+    return f"{_KEY_PREFIX}:{repo.full_name}:{since or 'all'}:{author_id}"
 
 
 async def get_cached_history(
-    repo: Repository, *, since: str | None = None
+    repo: Repository, *, author_id: str, since: str | None = None
 ) -> list[CommitHeader] | None:
     """
     Вернуть закешированный список CommitHeader, если pushed_at репозитория
@@ -47,7 +47,7 @@ async def get_cached_history(
     """
     try:
         r = await get_redis()
-        raw = await r.get(_cache_key(repo, since))
+        raw = await r.get(_cache_key(repo, since, author_id))
     except Exception as e:
         logger.warning(f"github cache get failed for {repo.full_name}: {e}")
         return None
@@ -81,7 +81,11 @@ async def get_cached_history(
 
 
 async def set_cached_history(
-    repo: Repository, headers: list[CommitHeader], *, since: str | None = None
+    repo: Repository,
+    headers: list[CommitHeader],
+    *,
+    author_id: str,
+    since: str | None = None,
 ) -> None:
     """Сохранить список CommitHeader вместе с текущим pushed_at репозитория."""
     payload = {
@@ -92,7 +96,7 @@ async def set_cached_history(
     try:
         r = await get_redis()
         await r.set(
-            _cache_key(repo, since),
+            _cache_key(repo, since, author_id),
             json.dumps(payload, ensure_ascii=False),
             ex=settings.cache_ttl_github,
         )
