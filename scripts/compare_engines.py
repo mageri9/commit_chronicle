@@ -2,8 +2,8 @@
 Сравнение старого collector'а (src/core/collector.py) и нового
 GitHub Engine (src/core/collector_v2.py) на одинаковых входных данных.
 
-параллельный прогон перед переключением production-пайплайна
-(worker/tasks.py) на collect_commits_v2. Не часть продакшн-кода,
+Квест 4.2 — параллельный прогон перед переключением production-пайплайна
+(worker/tasks.py) на collect_commits_v2 (Квест 4.3). Не часть продакшн-кода,
 не вызывается из worker/bot — запускается вручную при подготовке к
 переключению и после значимых изменений в src/github/.
 
@@ -18,8 +18,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# Скрипт лежит в scripts/, а не в корне — при прямом запуске
+# `python scripts/compare_engines.py` Python кладёт в sys.path[0]
+# папку самого скрипта, а не корень репозитория, и `import src`
+# падает с ModuleNotFoundError. Добавляем корень репозитория явно,
+# чтобы скрипт работал и как файл, и как модуль (-m scripts.compare_engines).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.core.collector import collect_commits
 from src.core.collector_v2 import collect_commits_v2

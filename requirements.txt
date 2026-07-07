@@ -8,6 +8,5 @@ sqlalchemy==2.0.23
 redis==8.0.1
 arq==0.25.0
 loguru==0.7.3
-httpx==0.25.2
 tiktoken==0.7.0
-httpx[http2]==0.27.2
+httpx[http2]==0.25.2

@@ -39,7 +39,7 @@ _DEFAULT_CONCURRENCY = 10
 async def _process_single_repo(
     service: GitHubService,
     repo: Repository,
-    since_date: str,
+    since_iso: str,
     semaphore: asyncio.Semaphore,
     index: int,
     total: int,
@@ -56,7 +56,7 @@ async def _process_single_repo(
 
         try:
             headers: list[CommitHeader] = [
-                h async for h in service.get_commit_history(repo, since=since_date)
+                h async for h in service.get_commit_history(repo, since=since_iso)
             ]
 
             if not headers:
@@ -109,9 +109,9 @@ async def _process_single_repo(
                 )
                 raise RepoAccessError(repo.full_name, status)
             logger.warning(
-                f"[{index}/{total}] 📁 {repo.full_name}: ❌ Ошибка API {status}"
+                f"[{index}/{total}] 📁 {repo.full_name}: ❌ Ошибка API {status}: {e}"
             )
-            raise CollectorError(f"GitHub API error: {status}")
+            raise CollectorError(f"GitHub API error {status}: {e}")
 
         except Exception as e:
             logger.warning(
@@ -135,6 +135,10 @@ async def collect_commits_v2(
     service = await get_github_service()
 
     since = datetime.strptime(since_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    # GraphQL $since: GitTimestamp ожидает полный ISO8601 с временем (см.
+    # queries.py::repository_commit_history_variables) — голая дата
+    # "2024-01-01" отклоняется GitHub как невалидное значение скаляра.
+    since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     all_repos = await service.list_repositories(username)
     active_repos = [
@@ -150,7 +154,7 @@ async def collect_commits_v2(
 
     semaphore = asyncio.Semaphore(max_concurrency)
     tasks = [
-        _process_single_repo(service, repo, since_date, semaphore, i, len(active_repos))
+        _process_single_repo(service, repo, since_iso, semaphore, i, len(active_repos))
         for i, repo in enumerate(active_repos, 1)
     ]
 
