@@ -91,6 +91,52 @@ def compare(old: AnalysisResult, new: AnalysisResult) -> Diff:
     return diff
 
 
+def print_files_mismatch_detail(
+    old: AnalysisResult, new: AnalysisResult, diff: Diff
+) -> None:
+    """
+    Точный diff по файлам для коммитов из diff.files_mismatch — какие именно
+    файлы/суммы разошлись между old и new. Печатается отдельно от основного
+    отчёта, т.к. полезно только при расследовании конкретного расхождения,
+    не при каждом штатном прогоне.
+    """
+    if not diff.files_mismatch:
+        return
+
+    old_by_key = {_commit_key(c): c for c in old.commits}
+    new_by_key = {_commit_key(c): c for c in new.commits}
+
+    print(f"\n{SEP}")
+    print("  Детальный diff по файлам (files_mismatch)")
+    print(SEP)
+
+    for repo, sha in diff.files_mismatch:
+        old_c = old_by_key[(repo, sha)]
+        new_c = new_by_key[(repo, sha)]
+
+        old_files = {(f.filename, f.additions, f.deletions) for f in old_c.files}
+        new_files = {(f.filename, f.additions, f.deletions) for f in new_c.files}
+
+        print(f"\n  {repo}@{sha}")
+        print(f"    message: {old_c.message[:72]!r}")
+
+        only_old = old_files - new_files
+        only_new = new_files - old_files
+
+        if only_old:
+            print("    только в old:")
+            for filename, add, dele in sorted(only_old):
+                print(f"      + {filename}  (+{add}/-{dele})")
+        if only_new:
+            print("    только в new:")
+            for filename, add, dele in sorted(only_new):
+                print(f"      + {filename}  (+{add}/-{dele})")
+        if not only_old and not only_new:
+            print("    (одинаковый набор файлов — расхождение в другом поле?)")
+
+    print(SEP)
+
+
 # ---------------------------------------------------------------------------
 # Прогон
 # ---------------------------------------------------------------------------
@@ -210,7 +256,7 @@ async def _main_async(args: argparse.Namespace) -> None:
     old_run: RunResult | None = None
     new_run: RunResult | None = None
 
-    if not args.skip_old and not args.skip_new:
+    if not args.skip_old and not args.skip_new and args.parallel:
         old_run, new_run = await asyncio.gather(
             _run_old(args.username, args.since),
             _run_new(args.username, args.since),
@@ -225,9 +271,11 @@ async def _main_async(args: argparse.Namespace) -> None:
     if old_run and new_run and old_run.result and new_run.result:
         diff = compare(old_run.result, new_run.result)
 
-    # Печатаем отчёт только для реально выполненных прогонов
     placeholder = RunResult("(пропущено)", None, 0.0, error="не запускался")
     print_report(old_run or placeholder, new_run or placeholder, diff)
+
+    if diff and old_run and new_run and old_run.result and new_run.result:
+        print_files_mismatch_detail(old_run.result, new_run.result, diff)
 
     if args.json and old_run and new_run:
         _dump_json(args.json, old_run, new_run, diff)
@@ -244,6 +292,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--skip-new", action="store_true", help="Не гонять collect_commits_v2"
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Гонять old и new одновременно (быстрее, но удваивает нагрузку "
+        "на GitHub-токены и рискует secondary rate limit — не отражает "
+        "прод, где движки никогда не работают параллельно)",
     )
     parser.add_argument("--json", help="Сохранить отчёт в JSON-файл")
     args = parser.parse_args()
