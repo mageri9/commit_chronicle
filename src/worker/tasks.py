@@ -9,6 +9,7 @@ from datetime import datetime
 from src.config import settings
 from src.core.collector import collect_commits
 from src.core.fingerprint import get_github_fingerprint
+from src.core.collector_v2 import collect_commits_v2
 from src.models.models import serialize_result
 from src.storage.database import (
     create_request,
@@ -17,6 +18,7 @@ from src.storage.database import (
 )
 from src.storage.pubsub import publish
 from src.logger import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -127,15 +129,24 @@ async def analyze_github_user(
         username,
     )
 
-    # 4. Запустить collector в ThreadPoolExecutor (синхронный PyGithub)
+    # 4. Запустить сбор — старый collector (ThreadPoolExecutor) или новый
+    #    GitHub Engine (нативный asyncio), в зависимости от фичефлага.
+    #    Оба ветвления возвращают один и тот же AnalysisResult — дальше
+    #    по пайплайну (serialize_result, update_request_status, publish)
+    #    ничего не знает, каким движком собран результат.
     try:
-        result = await loop.run_in_executor(
-            None,
-            collect_commits,
-            username,
-            period_start,
-            settings.max_workers,
-        )
+        if settings.use_github_engine_v2:
+            result = await collect_commits_v2(
+                username, period_start, max_concurrency=settings.max_workers
+            )
+        else:
+            result = await loop.run_in_executor(
+                None,
+                collect_commits,
+                username,
+                period_start,
+                settings.max_workers,
+            )
 
         # 5. Успех — сохранить результат и уведомить бота
         result_json = serialize_result(result)
