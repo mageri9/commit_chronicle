@@ -20,8 +20,10 @@ from src.github.paginator import collect_all, paginate
 from src.github.queries import (
     REPOSITORY_COMMIT_HISTORY,
     USER_REPOSITORIES,
+    USER_ID,
     repository_commit_history_variables,
     user_repositories_variables,
+    user_id_variables,
 )
 from src.logger import get_logger
 
@@ -49,8 +51,29 @@ async def list_repositories(client: GitHubClient, login: str) -> list[Repository
     return [Repository.from_graphql_node(node) for node in nodes]
 
 
+async def get_user_id(client: GitHubClient, login: str) -> str:
+    """
+    Node ID пользователя — нужен для фильтрации истории коммитов по автору
+    (см. queries.py::REPOSITORY_COMMIT_HISTORY). Отдельный лёгкий запрос,
+    не совмещённый с USER_REPOSITORIES, чтобы GitHubService мог закешировать
+    результат на весь процесс (login → id меняется практически никогда)
+    без привязки к пагинации репозиториев.
+    """
+    data = await client.graphql(USER_ID, user_id_variables(login))
+    user_node = data.get("user")
+    if user_node is None:
+        raise GitHubAPIError(
+            f"Пользователь {login!r} не найден на GitHub", status_code=404
+        )
+    return user_node["id"]
+
+
 async def get_commit_history(
-    client: GitHubClient, repo: Repository, *, since: str | None = None
+    client: GitHubClient,
+    repo: Repository,
+    *,
+    author_id: str,
+    since: str | None = None,
 ) -> AsyncIterator[CommitHeader]:
     """
     Стримит CommitHeader для одного репозитория по дефолтной ветке.
@@ -68,7 +91,12 @@ async def get_commit_history(
 
     async def fetch(after: str | None) -> dict:
         variables = repository_commit_history_variables(
-            repo.owner, repo.name, repo.default_branch, since=since, after=after
+            repo.owner,
+            repo.name,
+            repo.default_branch,
+            author_id=author_id,
+            since=since,
+            after=after,
         )
         data = await client.graphql(REPOSITORY_COMMIT_HISTORY, variables)
         return _extract_history_connection(data)

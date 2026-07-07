@@ -60,19 +60,36 @@ query($login: String!, $after: String) {{
 }}
 """
 
+USER_ID = """
+query($login: String!) {
+  user(login: $login) { id }
+}
+"""
+
+
+def user_id_variables(login: str) -> dict:
+    """Переменные для USER_ID."""
+    return {"login": login}
+
 
 REPOSITORY_COMMIT_HISTORY = f"""
 query(
   $owner: String!
   $name: String!
   $branch: String!
+  $authorId: ID
   $since: GitTimestamp
   $after: String
 ) {{
   repository(owner: $owner, name: $name) {{
     object(expression: $branch) {{
       ... on Commit {{
-        history(first: {PAGE_SIZE}, after: $after, since: $since) {{
+        history(
+            first: {PAGE_SIZE}
+            after: $after
+            since: $since
+            author: {{ id: $authorId }}
+            ) {{
           pageInfo {{ hasNextPage endCursor }}
           nodes {{
             oid
@@ -106,6 +123,7 @@ def repository_commit_history_variables(
     name: str,
     branch: str,
     *,
+    author_id: str,
     since: str | None = None,
     after: str | None = None,
 ) -> dict:
@@ -123,6 +141,7 @@ def repository_commit_history_variables(
         "owner": owner,
         "name": name,
         "branch": branch,
+        "authorId": author_id,
         "since": since,
         "after": after,
     }

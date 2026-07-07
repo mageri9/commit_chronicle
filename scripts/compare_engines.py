@@ -34,6 +34,7 @@ from src.core.collector import collect_commits
 from src.core.collector_v2 import collect_commits_v2
 from src.logger import get_logger
 from src.models.models import AnalysisResult, Commit
+from src.github.client import close_github_client
 
 logger = get_logger(__name__)
 
@@ -230,6 +231,8 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     if args.json and old_run and new_run:
         _dump_json(args.json, old_run, new_run, diff)
+
+    await close_github_client()
 
 
 def main() -> None:

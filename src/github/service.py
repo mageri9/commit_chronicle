@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from src.github.client import GitHubClient, get_github_client
 from src.github.filters import RestDetailsPolicy, needs_rest_details
 from src.github.graphql import get_commit_history as _get_commit_history
+from src.github.graphql import get_user_id as _get_user_id
 from src.github.graphql import list_repositories as _list_repositories
 from src.github.models import CommitDetails, CommitHeader, Repository
 from src.github.rest import get_commit_details as _get_commit_details
@@ -36,6 +37,15 @@ class GitHubService:
     ) -> None:
         self._client = client
         self._rest_policy = rest_policy or RestDetailsPolicy()
+        self._user_id_cache: dict[str, str] = {}
+
+    async def _resolve_user_id(self, login: str) -> str:
+        cached = self._user_id_cache.get(login)
+        if cached is not None:
+            return cached
+        user_id = await _get_user_id(self._client, login)
+        self._user_id_cache[login] = user_id
+        return user_id
 
     async def list_repositories(self, login: str) -> list[Repository]:
         """Все репозитории пользователя (владелец). Форки не фильтрует."""
@@ -62,8 +72,12 @@ class GitHubService:
                 yield header
             return
 
+        author_id = await self._resolve_user_id(repo.owner)
+
         headers: list[CommitHeader] = []
-        async for header in _get_commit_history(self._client, repo, since=since):
+        async for header in _get_commit_history(
+            self._client, repo, author_id=author_id, since=since
+        ):
             if header.is_merge:
                 continue
             headers.append(header)
