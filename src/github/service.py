@@ -19,6 +19,7 @@ from src.github.graphql import get_commit_history as _get_commit_history
 from src.github.graphql import list_repositories as _list_repositories
 from src.github.models import CommitDetails, CommitHeader, Repository
 from src.github.rest import get_commit_details as _get_commit_details
+from src.github.cache import get_cached_history, set_cached_history
 
 
 class GitHubService:
@@ -47,11 +48,28 @@ class GitHubService:
         Стримит CommitHeader по одному репозиторию, УЖЕ без мёрж-коммитов —
         это единственное место, где применяется фильтр is_merge, так что
         вызывающему коду (collector) не нужно про него помнить.
+
+        Repository-level cache (Квест 3.3): если pushed_at репозитория не
+        изменился с прошлого раза — отдаём сохранённый список, GraphQL не
+        трогаем вообще. Кешируется только полностью пройденная история
+        (запись в кеш — после генератора, не внутри) — партиальный список
+        из-за раннего break или исключения у вызывающего кода не попадёт
+        в кеш как будто это полная история.
         """
+        cached = await get_cached_history(repo, since=since)
+        if cached is not None:
+            for header in cached:
+                yield header
+            return
+
+        headers: list[CommitHeader] = []
         async for header in _get_commit_history(self._client, repo, since=since):
             if header.is_merge:
                 continue
+            headers.append(header)
             yield header
+
+        await set_cached_history(repo, headers, since=since)
 
     async def enrich_with_details(
         self, repo: Repository, header: CommitHeader

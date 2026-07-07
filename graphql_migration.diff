@@ -1,0 +1,1714 @@
+diff --git a/.dockerignore b/.dockerignore
+index cd7ab95..2124f3a 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -28,7 +28,7 @@ logs/
+ .DS_Store
+ Thumbs.db
+ 
+-# Tests & temp
+-test_worker.py
+-check_mapping.py
+-benchmark_json.py
+\ No newline at end of file
++# Tests & dev-only scripts
++tests/
++scripts/
++docs/
+\ No newline at end of file
+diff --git a/.env.example b/.env.example
+index f628921..c272121 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,7 +6,7 @@ GITHUB_EXTRA_TOKENS=
+ # ============ Telegram ============
+ TELEGRAM_BOT_TOKEN=xxx_telegram_bot_token
+ 
+-# ============ LLM ============
++# ============ LLM (пока не используется, см. README → Роадмап) ============
+ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
+ LLM_MODEL=gpt-4o-mini
+ 
+@@ -23,6 +23,5 @@ USER_COOLDOWN_MINUTES=30
+ CACHE_TTL_GITHUB=3600
+ CACHE_TTL_LLM=86400
+ 
+-# ============ Paths ============
+-PDF_OUTPUT_DIR=data/pdf_reports
++# ============ Logging ============
+ LOG_LEVEL=INFO
+\ No newline at end of file
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index 1f4eeca..95ef502 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -66,5 +66,5 @@ jobs:
+           script: |
+             cd ~/apps/commit_chronicle
+             docker compose pull
+-            docker compose up -d
++            docker compose up -d --remove-orphans
+             docker image prune -f
+\ No newline at end of file
+diff --git a/requirements.txt b/requirements.txt
+index 4bb4432..f0c4c14 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -9,4 +9,5 @@ redis==8.0.1
+ arq==0.25.0
+ loguru==0.7.3
+ httpx==0.25.2
+-tiktoken==0.7.0
+\ No newline at end of file
++tiktoken==0.7.0
++httpx[http2]==0.27.2
+\ No newline at end of file
+diff --git a/benchmark_json.py b/scripts/benchmark_json.py
+similarity index 93%
+rename from benchmark_json.py
+rename to scripts/benchmark_json.py
+index 93ffec9..5d52215 100644
+--- a/benchmark_json.py
++++ b/scripts/benchmark_json.py
+@@ -4,10 +4,10 @@
+ Цель: помочь подобрать параметры (msg_limit, включать ли files)
+ чтобы укладываться в контекстное окно LLM.
+ 
+-Использование:
+-    python benchmark_json.py                  # последняя запись из БД
+-    python benchmark_json.py --id <job_id>    # конкретная запись
+-    python benchmark_json.py --limit 8000     # показать что влезает в 8k токенов
++Использование (из корня репозитория):
++    python scripts/benchmark_json.py                  # последняя запись из БД
++    python scripts/benchmark_json.py --id <job_id>    # конкретная запись
++    python scripts/benchmark_json.py --limit 8000     # показать что влезает в 8k токенов
+ """
+ 
+ import argparse
+@@ -23,10 +23,6 @@ from src.models.models import (
+ )
+ from src.storage.database import engine, requests
+ 
+-# "from" зарезервирован в Python, в модели называется from_.
+-# Хардкодим здесь — бенчмарк локальная утилита, не продакшн-код.
+-_FROM_KEY = "from"
+-
+ # Ключ "from" зарезервирован в Python, в модели называется from_.
+ # Хардкодим здесь — бенчмарк локальная утилита, не продакшн-код.
+ _FROM_KEY = "from"
+diff --git a/src/config.py b/src/config.py
+index cdc5eb8..1ad9bbf 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -3,7 +3,6 @@
+ Крашится при запуске если нет обязательных переменных.
+ """
+ 
+-from pathlib import Path
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+ from src.logger import get_logger
+ 
+@@ -13,6 +12,26 @@ logger = get_logger(__name__)
+ PLACEHOLDER_MARKER = "xxx"
+ 
+ 
++class LLMSettings(BaseSettings):
++    """
++    Настройки LLM-слоя. Вынесены отдельно от основного Settings,
++    потому что сама функция ещё не реализована (см. README → Роадмап).
++    Когда появится LLM-анализ — этот класс станет обязательным блоком
++    основного Settings, а не будет "прятать" необязательные поля среди
++    критичных production-настроек.
++    """
++
++    model_config = SettingsConfigDict(
++        env_file=".env",
++        env_file_encoding="utf-8",
++        extra="ignore",
++        case_sensitive=False,
++    )
++
++    openai_api_key: str = ""
++    llm_model: str = "gpt-4o-mini"
++
++
+ class Settings(BaseSettings):
+     model_config = SettingsConfigDict(
+         env_file=".env",
+@@ -28,11 +47,6 @@ class Settings(BaseSettings):
+     # Telegram
+     telegram_bot_token: str
+ 
+-    # LLM — опциональный пока функция не реализована;
+-    # TODO: сделать обязательным когда появится LLM-слой
+-    openai_api_key: str = ""
+-    llm_model: str = "gpt-4o-mini"
+-
+     # Storage
+     database_url: str = "sqlite+aiosqlite:///data/app.db"
+     redis_url: str
+@@ -46,8 +60,7 @@ class Settings(BaseSettings):
+     cache_ttl_github: int = 3600
+     cache_ttl_llm: int = 86400
+ 
+-    # Paths
+-    pdf_output_dir: Path = Path("data/pdf_reports")
++    # Logging
+     log_level: str = "INFO"
+ 
+     @property
+@@ -63,7 +76,6 @@ class Settings(BaseSettings):
+     @property
+     def is_configured(self) -> bool:
+         """Быстрая проверка, что ключи не из .example."""
+-        # openai_api_key не проверяем — опциональный до реализации LLM
+         critical_keys = [
+             self.github_token,
+             self.telegram_bot_token,
+@@ -71,9 +83,10 @@ class Settings(BaseSettings):
+         return not any(PLACEHOLDER_MARKER in key for key in critical_keys)
+ 
+ 
+-# Глобальный экземпляр
++# Глобальные экземпляры
+ try:
+     settings = Settings()
++    llm_settings = LLMSettings()
+ except Exception as e:
+     logger.error(e)
+     raise
+diff --git a/src/github/__init__.py b/src/github/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/github/auth.py b/src/github/auth.py
+new file mode 100644
+index 0000000..3c7393c
+--- /dev/null
++++ b/src/github/auth.py
+@@ -0,0 +1,208 @@
++"""
++Token Pool — хранилище состояния GitHub-токенов и выбор лучшего для запроса.
++
++Отличия от старого src/core/token_rotator.py:
++    - round-robin заменён на "выбрать токен с наибольшим известным remaining";
++    - REST и GraphQL учитываются раздельно — у них разные бюджеты
++      (5000 req/h для REST, отдельный points-бюджет для GraphQL)
++      и разное время сброса;
++    - блокировка токена при rate-limit хранит реальный reset_at
++      (из ответа GitHub), а не фиксированный duration вслепую;
++    - блокировка при auth-ошибке (невалидный токен) — отдельный
++      механизм, т.к. она не снимается автоматическим reset'ом лимита.
++
++Пул не знает про HTTP — это чистое хранилище состояния с политикой
++выбора. Решение "надо ли сейчас ждать перед запросом и сколько" —
++зона ответственности ratelimit.py, который работает поверх этого пула.
++"""
++
++from __future__ import annotations
++
++import time
++from asyncio import Lock
++from dataclasses import dataclass, field
++from typing import Literal
++
++ApiKind = Literal["rest", "graphql"]
++
++
++@dataclass
++class _RateWindow:
++    """Известное состояние лимита для одного API одного токена."""
++
++    remaining: int | None = None  # None = ещё не знаем, считаем токен доступным
++    reset_at: float = 0.0  # unix-время, когда лимит обновится
++
++
++@dataclass
++class TokenState:
++    """Полное состояние одного токена в пуле."""
++
++    value: str
++    rest: _RateWindow = field(default_factory=_RateWindow)
++    graphql: _RateWindow = field(default_factory=_RateWindow)
++    blocked_until: float | None = None  # см. AuthenticationError, не rate-limit
++    blocked_reason: str | None = None
++
++    def window(self, api: ApiKind) -> _RateWindow:
++        return self.rest if api == "rest" else self.graphql
++
++    def is_blocked(self, now: float) -> bool:
++        """Заблокирован ли токен целиком (auth-ошибка)."""
++        if self.blocked_until is None:
++            return False
++        if now >= self.blocked_until:
++            # Блокировка истекла — снимаем лениво, при первой же проверке
++            self.blocked_until = None
++            self.blocked_reason = None
++            return False
++        return True
++
++    def is_exhausted(self, api: ApiKind, now: float) -> bool:
++        """Известно, что лимит исчерпан и ещё не наступило время сброса."""
++        w = self.window(api)
++        if w.remaining is None:
++            return False
++        if w.remaining > 0:
++            return False
++        return now < w.reset_at
++
++
++class TokenHandle:
++    """
++    Обёртка вокруг выбранного токена для вызывающего кода (client.py).
++
++    Несёт .value для подстановки в заголовок Authorization и ссылку
++    на пул, чтобы после запроса одним вызовом отчитаться об использовании
++    или сообщить о блокировке — без явной передачи токена туда-обратно.
++    """
++
++    __slots__ = ("value", "_pool", "_api")
++
++    def __init__(self, value: str, pool: "TokenPool", api: ApiKind) -> None:
++        self.value = value
++        self._pool = pool
++        self._api = api
++
++    async def report(self, *, remaining: int, reset_at: float) -> None:
++        """Обновить известное состояние лимита после успешного запроса."""
++        await self._pool.report_usage(
++            self.value, self._api, remaining=remaining, reset_at=reset_at
++        )
++
++    async def block(self, *, reason: str, duration: float = 3600.0) -> None:
++        """Заблокировать токен целиком (например, после AuthenticationError)."""
++        await self._pool.block(self.value, reason=reason, duration=duration)
++
++
++class TokenPool:
++    """
++    Пул GitHub-токенов с раздельным учётом лимитов REST и GraphQL.
++
++    Использование:
++        pool = TokenPool(settings.all_github_tokens)
++        handle = await pool.acquire("graphql")
++        # ... делаем запрос с Authorization: Bearer {handle.value} ...
++        await handle.report(remaining=..., reset_at=...)
++    """
++
++    def __init__(self, tokens: list[str]) -> None:
++        if not tokens:
++            raise ValueError("Нужен хотя бы один GitHub токен")
++        self._states: dict[str, TokenState] = {t: TokenState(value=t) for t in tokens}
++        self._lock = Lock()
++
++    @property
++    def size(self) -> int:
++        return len(self._states)
++
++    async def acquire(self, api: ApiKind = "rest") -> TokenHandle:
++        """
++        Вернуть токен с наибольшим известным remaining для данного API.
++
++        Токены, которые ещё ни разу не использовались (remaining неизвестен),
++        считаются доступными и предпочитаются токенам с точно исчерпанным
++        лимитом — так пул естественным образом сначала пробует "свежие"
++        токены, прежде чем полагаться на неполные данные о старых.
++
++        Если все токены сейчас недоступны (заблокированы или лимит
++        исчерпан) — возвращается тот, что освободится раньше всех.
++        Вызывающий код (ratelimit.py) решает, ждать ли и сколько.
++        """
++        async with self._lock:
++            now = time.time()
++            candidates = [
++                s
++                for s in self._states.values()
++                if not s.is_blocked(now) and not s.is_exhausted(api, now)
++            ]
++
++            if candidates:
++                best = max(
++                    candidates,
++                    key=lambda s: (
++                        s.window(api).remaining
++                        if s.window(api).remaining is not None
++                        else float("inf")
++                    ),
++                )
++                return TokenHandle(best.value, self, api)
++
++            soonest = min(
++                self._states.values(),
++                key=lambda s: max(s.blocked_until or 0.0, s.window(api).reset_at),
++            )
++            return TokenHandle(soonest.value, self, api)
++
++    async def report_usage(
++        self, token: str, api: ApiKind, *, remaining: int, reset_at: float
++    ) -> None:
++        """Обновить известное состояние токена после реального запроса."""
++        async with self._lock:
++            state = self._states.get(token)
++            if state is None:
++                return
++            window = state.window(api)
++            window.remaining = remaining
++            window.reset_at = reset_at
++
++    async def block(self, token: str, *, reason: str, duration: float = 3600.0) -> None:
++        """
++        Заблокировать токен целиком — используется для ошибок, которые
++        rate-limit'ом не являются (невалидный/отозванный токен). В отличие
++        от исчерпания лимита, такая блокировка не снимается автоматическим
++        reset_at от GitHub, поэтому используется ручной duration.
++        """
++        async with self._lock:
++            state = self._states.get(token)
++            if state is None:
++                return
++            state.blocked_until = time.time() + duration
++            state.blocked_reason = reason
++
++    async def peek(self, token: str, api: ApiKind) -> tuple[int | None, float]:
++        """
++        Известное (возможно устаревшее) remaining/reset_at для конкретного
++        токена без влияния на выбор — используется RateLimiter'ом, чтобы
++        решить, стоит ли ждать перед запросом этим токеном.
++        """
++        async with self._lock:
++            state = self._states.get(token)
++            if state is None:
++                return None, 0.0
++            window = state.window(api)
++            return window.remaining, window.reset_at
++
++    def snapshot(self) -> dict[str, dict]:
++        """
++        Текущее состояние всех токенов для логов/дебага.
++        Токены маскируются — в логи не должен попадать полный секрет.
++        """
++        return {
++            f"{token[:8]}…": {
++                "rest_remaining": s.rest.remaining,
++                "graphql_remaining": s.graphql.remaining,
++                "blocked": s.blocked_reason,
++            }
++            for token, s in self._states.items()
++        }
+\ No newline at end of file
+diff --git a/src/github/client.py b/src/github/client.py
+new file mode 100644
+index 0000000..c0dec3e
+--- /dev/null
++++ b/src/github/client.py
+@@ -0,0 +1,309 @@
++"""
++GitHubClient — единственная точка HTTP-доступа к GitHub API.
++
++Не знает ничего про репозитории, коммиты или бизнес-логику — только про
++то, как сходить в REST/GraphQL, подставить подходящий токен из TokenPool
++и корректно среагировать на rate-limit/auth-ошибки. Всё, что выше
++(graphql.py, rest.py, service.py), работает через client.get/post/graphql
++и не думает о токенах, ретраях или заголовках.
++
++Один экземпляр на процесс — переиспользует HTTP/2-соединения между
++всеми вызовами (см. get_github_client() в конце файла).
++"""
++
++from __future__ import annotations
++
++import time
++from datetime import datetime
++from typing import Any
++
++import httpx
++
++from src.github.auth import TokenHandle, TokenPool
++from src.github.exceptions import (
++    AuthenticationError,
++    GitHubAPIError,
++    GraphQLError,
++    NodeLimitExceeded,
++    RateLimitExceeded,
++)
++from src.logger import get_logger
++
++logger = get_logger(__name__)
++
++REST_BASE_URL = "https://api.github.com"
++GRAPHQL_URL = "https://api.github.com/graphql"
++
++# Сколько раз пробовать другой токен при auth-ошибке/rate-limit,
++# прежде чем сдаться и пробросить ошибку наверх.
++_MAX_AUTH_RETRIES = 3
++
++
++class GitHubClient:
++    """
++    Транспортный клиент GitHub API (REST + GraphQL) поверх httpx/HTTP2.
++
++    Использование:
++        client = GitHubClient(token_pool)
++        data = await client.graphql(query, variables)
++        payload = await client.get("/rate_limit")
++    """
++
++    def __init__(
++        self,
++        token_pool: TokenPool,
++        *,
++        timeout: float = 30.0,
++        transport: httpx.AsyncBaseTransport | None = None,
++    ) -> None:
++        self._pool = token_pool
++        self._http = httpx.AsyncClient(
++            # http2 несовместим с явно переданным mock-транспортом (тесты) —
++            # в проде transport всегда None, и HTTP/2 включается как обычно.
++            http2=transport is None,
++            timeout=timeout,
++            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
++            headers={
++                "Accept": "application/vnd.github+json",
++                "X-GitHub-Api-Version": "2022-11-28",
++            },
++            transport=transport,
++        )
++
++    async def aclose(self) -> None:
++        await self._http.aclose()
++
++    # ------------------------------------------------------------------
++    # REST
++    # ------------------------------------------------------------------
++
++    async def get(self, endpoint: str, *, params: dict[str, Any] | None = None) -> Any:
++        """GET к REST API. endpoint — путь без базового URL, напр. '/rate_limit'."""
++        return await self._request_rest("GET", endpoint, params=params)
++
++    async def post(
++        self, endpoint: str, *, json_body: dict[str, Any] | None = None
++    ) -> Any:
++        """POST к REST API."""
++        return await self._request_rest("POST", endpoint, json_body=json_body)
++
++    async def _request_rest(
++        self,
++        method: str,
++        endpoint: str,
++        *,
++        params: dict[str, Any] | None = None,
++        json_body: dict[str, Any] | None = None,
++    ) -> Any:
++        url = endpoint if endpoint.startswith("http") else f"{REST_BASE_URL}{endpoint}"
++
++        last_error: GitHubAPIError | None = None
++        for _ in range(_MAX_AUTH_RETRIES):
++            handle = await self._pool.acquire("rest")
++            response = await self._http.request(
++                method,
++                url,
++                params=params,
++                json=json_body,
++                headers={"Authorization": f"Bearer {handle.value}"},
++            )
++
++            await self._report_rest_limit(handle, response)
++
++            if response.status_code == 401:
++                await handle.block(reason="401 unauthorized")
++                last_error = AuthenticationError(
++                    "Токен отклонён (401)",
++                    status_code=401,
++                    response_body=response.text,
++                )
++                continue
++
++            if response.status_code == 403 and _is_rate_limit_response(response):
++                last_error = RateLimitExceeded(
++                    "REST rate limit исчерпан",
++                    reset_at=_parse_reset_header(response),
++                    status_code=403,
++                    response_body=response.text,
++                )
++                continue
++
++            if response.status_code == 429:
++                last_error = RateLimitExceeded(
++                    "Secondary rate limit (429)",
++                    reset_at=_parse_retry_after(response),
++                    status_code=429,
++                    response_body=response.text,
++                )
++                continue
++
++            if response.status_code >= 400:
++                # Сюда попадают permission-ошибки (403 без rate-limit),
++                # 404 и прочее — это НЕ retry-friendly ошибки, бизнес-слой
++                # (collector) решает по status_code, что с ними делать.
++                raise GitHubAPIError(
++                    f"GitHub REST error {response.status_code}",
++                    status_code=response.status_code,
++                    response_body=response.text,
++                )
++
++            return response.json() if response.content else None
++
++        assert last_error is not None
++        raise last_error
++
++    async def _report_rest_limit(
++        self, handle: TokenHandle, response: httpx.Response
++    ) -> None:
++        remaining = response.headers.get("X-RateLimit-Remaining")
++        reset = response.headers.get("X-RateLimit-Reset")
++        if remaining is not None and reset is not None:
++            await handle.report(remaining=int(remaining), reset_at=float(reset))
++
++    # ------------------------------------------------------------------
++    # GraphQL
++    # ------------------------------------------------------------------
++
++    async def graphql(
++        self, query: str, variables: dict[str, Any] | None = None
++    ) -> dict[str, Any]:
++        """
++        Выполнить GraphQL-запрос. Возвращает содержимое "data".
++
++        Если query включает блок `rateLimit { remaining resetAt }` —
++        клиент прочитает его из ответа и обновит TokenPool. Осознанное
++        решение: GraphQL не отдаёт лимиты в заголовках (в отличие от REST),
++        поэтому запрашивающий query сам решает, включать ли этот блок
++        (см. src/github/queries.py).
++        """
++        last_error: GitHubAPIError | None = None
++
++        for _ in range(_MAX_AUTH_RETRIES):
++            handle = await self._pool.acquire("graphql")
++            response = await self._http.post(
++                GRAPHQL_URL,
++                json={"query": query, "variables": variables or {}},
++                headers={"Authorization": f"Bearer {handle.value}"},
++            )
++
++            if response.status_code == 401:
++                await handle.block(reason="401 unauthorized")
++                last_error = AuthenticationError(
++                    "Токен отклонён (401)",
++                    status_code=401,
++                    response_body=response.text,
++                )
++                continue
++
++            if response.status_code == 429:
++                last_error = RateLimitExceeded(
++                    "Secondary rate limit (429)",
++                    reset_at=_parse_retry_after(response),
++                    status_code=429,
++                    response_body=response.text,
++                )
++                continue
++
++            if response.status_code >= 400:
++                raise GitHubAPIError(
++                    f"GitHub GraphQL transport error {response.status_code}",
++                    status_code=response.status_code,
++                    response_body=response.text,
++                )
++
++            body = response.json()
++
++            if body.get("errors"):
++                errors = body["errors"]
++                error_types = {e.get("type") for e in errors}
++                message = "; ".join(e.get("message", "") for e in errors)
++
++                if "MAX_NODE_LIMIT_EXCEEDED" in error_types:
++                    raise NodeLimitExceeded(
++                        message or "GraphQL node limit exceeded",
++                        errors=errors,
++                        query=query,
++                    )
++
++                if "RATE_LIMITED" in error_types:
++                    last_error = RateLimitExceeded(message or "GraphQL rate limit")
++                    continue
++
++                raise GraphQLError(
++                    message or "GraphQL error", errors=errors, query=query
++                )
++
++            data = body.get("data") or {}
++            await self._maybe_report_graphql_limit(handle, data)
++            return data
++
++        assert last_error is not None
++        raise last_error
++
++    async def _maybe_report_graphql_limit(
++        self, handle: TokenHandle, data: dict[str, Any]
++    ) -> None:
++        rate_limit = data.get("rateLimit")
++        if not rate_limit:
++            return
++        remaining = rate_limit.get("remaining")
++        reset_at_str = rate_limit.get("resetAt")
++        if remaining is None or reset_at_str is None:
++            return
++        await handle.report(
++            remaining=int(remaining), reset_at=_parse_iso_timestamp(reset_at_str)
++        )
++
++
++# ---------------------------------------------------------------------------
++# Вспомогательные парсеры ответов
++# ---------------------------------------------------------------------------
++
++
++def _is_rate_limit_response(response: httpx.Response) -> bool:
++    return response.headers.get("X-RateLimit-Remaining") == "0"
++
++
++def _parse_reset_header(response: httpx.Response) -> float | None:
++    reset = response.headers.get("X-RateLimit-Reset")
++    return float(reset) if reset is not None else None
++
++
++def _parse_retry_after(response: httpx.Response) -> float | None:
++    retry_after = response.headers.get("Retry-After")
++    if retry_after is None:
++        return None
++    return time.time() + float(retry_after)
++
++
++def _parse_iso_timestamp(value: str) -> float:
++    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
++
++
++# ---------------------------------------------------------------------------
++# Синглтон на процесс (по аналогии с src/storage/redis.py)
++# ---------------------------------------------------------------------------
++
++_client: GitHubClient | None = None
++_pool: TokenPool | None = None
++
++
++async def get_github_client() -> GitHubClient:
++    """Ленивая инициализация — один клиент и один пул токенов на процесс."""
++    global _client, _pool
++    if _client is None:
++        from src.config import settings
++
++        _pool = TokenPool(settings.all_github_tokens)
++        _client = GitHubClient(_pool)
++    return _client
++
++
++async def close_github_client() -> None:
++    """Закрыть клиент при graceful shutdown."""
++    global _client, _pool
++    if _client is not None:
++        await _client.aclose()
++        _client = None
++        _pool = None
++        logger.debug("GitHub client closed")
+\ No newline at end of file
+diff --git a/src/github/exceptions.py b/src/github/exceptions.py
+new file mode 100644
+index 0000000..ee06f4c
+--- /dev/null
++++ b/src/github/exceptions.py
+@@ -0,0 +1,98 @@
++"""
++Исключения транспортного слоя GitHub Engine.
++
++Это исключения уровня "клиент говорит с GitHub API" — они не знают
++ничего про репозитории, коммиты или бизнес-смысл ошибки. Бизнес-уровень
++(collector) ловит их и решает, что делать: пропустить репозиторий,
++повторить запрос, остановить сбор целиком.
++
++Иерархия сознательно плоская: не пытаемся заранее угадать все возможные
++причины ошибок GitHub API — вместо этого несём в исключении сырые данные
++(status_code, response body), которые вызывающий код может исследовать
++сам при необходимости.
++"""
++
++from __future__ import annotations
++
++
++class GitHubAPIError(Exception):
++    """
++    Базовая ошибка транспортного слоя. Всё, что можно поймать одним
++    except, чтобы обработать "что-то пошло не так на уровне HTTP/API",
++    не заботясь о конкретной причине.
++    """
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        status_code: int | None = None,
++        response_body: str | None = None,
++    ) -> None:
++        self.status_code = status_code
++        self.response_body = response_body
++        super().__init__(message)
++
++    def __repr__(self) -> str:  # pragma: no cover — удобство отладки в логах
++        return (
++            f"{self.__class__.__name__}("
++            f"status_code={self.status_code!r}, "
++            f"message={str(self)!r})"
++        )
++
++
++class AuthenticationError(GitHubAPIError):
++    """
++    Токен невалиден, отозван или не имеет нужных прав (401/403 не по
++    причине rate limit). Отличается от RateLimitExceeded тем, что
++    повторная попытка с тем же токеном бессмысленна — токен нужно
++    исключить из ротации, а не подождать и повторить.
++    """
++
++
++class RateLimitExceeded(GitHubAPIError):
++    """
++    Исчерпан лимит запросов — либо REST (X-RateLimit-*), либо GraphQL
++    (rateLimit.remaining в теле ответа). reset_at — unix-время, когда
++    лимит обновится; используется RateLimiter'ом, чтобы не ждать вслепую.
++    """
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        reset_at: float | None = None,
++        status_code: int | None = None,
++        response_body: str | None = None,
++    ) -> None:
++        self.reset_at = reset_at
++        super().__init__(message, status_code=status_code, response_body=response_body)
++
++
++class GraphQLError(GitHubAPIError):
++    """
++    GraphQL-запрос вернул HTTP 200, но в теле ответа есть поле "errors".
++    Это отдельный случай от GitHubAPIError, потому что GraphQL почти
++    всегда отвечает 200 даже при ошибке — статус-код не годится как
++    сигнал, приходится проверять тело ответа отдельно.
++    """
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        errors: list[dict] | None = None,
++        query: str | None = None,
++    ) -> None:
++        self.errors = errors or []
++        self.query = query
++        super().__init__(message)
++
++
++class NodeLimitExceeded(GraphQLError):
++    """
++    GraphQL-запрос отклонён из-за превышения лимита узлов
++    (MAX_NODE_LIMIT_EXCEEDED). Отдельный класс — потому что реакция
++    на эту ошибку отличается от прочих GraphQL-ошибок: нужно уменьшить
++    объём запроса (paginate меньшими порциями), а не ретраить как есть.
++    """
+\ No newline at end of file
+diff --git a/src/github/filters.py b/src/github/filters.py
+new file mode 100644
+index 0000000..a4428fc
+--- /dev/null
++++ b/src/github/filters.py
+@@ -0,0 +1,57 @@
++"""
++Правила отсева — когда коммиту РЕАЛЬНО нужен REST-запрос за файлами,
++а когда можно сэкономить и обойтись только CommitHeader из GraphQL.
++Мёрж-коммиты сюда не относятся — отфильтровываются раньше, на уровне
++пайплайна (service.py), до needs_rest_details вообще не доходят.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime, timezone
++
++from src.github.models import CommitHeader
++
++
++@dataclass(frozen=True)
++class RestDetailsPolicy:
++    """max_age_days — коммиты старше не добираются файлами через REST,
++    даже если были реальные изменения. None — без ограничения по возрасту."""
++
++    max_age_days: int | None = None
++
++
++_DEFAULT_POLICY = RestDetailsPolicy()
++
++
++def needs_rest_details(
++    header: CommitHeader,
++    *,
++    policy: RestDetailsPolicy | None = None,
++    now: datetime | None = None,
++) -> bool:
++    """
++    Правила (первое совпавшее решает):
++        1. changed_files == 0          -> False
++        2. additions == deletions == 0 -> False
++        3. коммит старше max_age_days  -> False
++        4. иначе                       -> True
++    """
++    policy = policy or _DEFAULT_POLICY
++
++    if header.changed_files == 0:
++        return False
++
++    if header.additions == 0 and header.deletions == 0:
++        return False
++
++    if policy.max_age_days is not None:
++        reference = now or datetime.now(timezone.utc)
++        commit_date = header.date
++        if commit_date.tzinfo is None:
++            commit_date = commit_date.replace(tzinfo=timezone.utc)
++        age_days = (reference - commit_date).days
++        if age_days > policy.max_age_days:
++            return False
++
++    return True
+\ No newline at end of file
+diff --git a/src/github/graphql.py b/src/github/graphql.py
+new file mode 100644
+index 0000000..1046cf5
+--- /dev/null
++++ b/src/github/graphql.py
+@@ -0,0 +1,93 @@
++"""
++GraphQL-слой GitHub Engine — то немногое, что знает, как из ответов
++GitHubClient достать репозитории и историю коммитов, используя
++paginator.py для курсоров и models.py для превращения сырых узлов
++в доменные объекты.
++
++Не знает ничего про фильтрацию (форки, кеш по pushedAt, needs_rest_details)
++— это ответственность более высокого уровня (service.py).
++Здесь только "как получить данные", не "какие данные нам нужны".
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator
++
++from src.github.client import GitHubClient
++from src.github.exceptions import GitHubAPIError
++from src.github.models import CommitHeader, Repository
++from src.github.paginator import collect_all, paginate
++from src.github.queries import (
++    REPOSITORY_COMMIT_HISTORY,
++    USER_REPOSITORIES,
++    repository_commit_history_variables,
++    user_repositories_variables,
++)
++from src.logger import get_logger
++
++logger = get_logger(__name__)
++
++
++async def list_repositories(client: GitHubClient, login: str) -> list[Repository]:
++    """
++    Список всех репозиториев пользователя (владелец, не участник чужих
++    репо — см. ownerAffiliations: OWNER в queries.py). Включает форки —
++    решение, фильтровать их или нет, принимает вызывающий код.
++    """
++
++    async def fetch(after: str | None) -> dict:
++        variables = user_repositories_variables(login, after=after)
++        data = await client.graphql(USER_REPOSITORIES, variables)
++        user_node = data.get("user")
++        if user_node is None:
++            raise GitHubAPIError(
++                f"Пользователь {login!r} не найден на GitHub", status_code=404
++            )
++        return user_node["repositories"]
++
++    nodes = await collect_all(fetch)
++    return [Repository.from_graphql_node(node) for node in nodes]
++
++
++async def get_commit_history(
++    client: GitHubClient, repo: Repository, *, since: str | None = None
++) -> AsyncIterator[CommitHeader]:
++    """
++    Стримит CommitHeader для одного репозитория по дефолтной ветке.
++
++    Если у репозитория нет дефолтной ветки (пустой репозиторий без единого
++    коммита) — просто ничего не отдаёт, не делая запрос: GraphQL-переменная
++    $branch объявлена как String! (non-null), отправка null туда упадёт
++    валидацией на стороне GitHub, а не вернёт пустой результат.
++    """
++    if not repo.default_branch:
++        logger.debug(
++            f"{repo.full_name}: нет default_branch (пустой репозиторий?) — пропускаю"
++        )
++        return
++
++    async def fetch(after: str | None) -> dict:
++        variables = repository_commit_history_variables(
++            repo.owner, repo.name, repo.default_branch, since=since, after=after
++        )
++        data = await client.graphql(REPOSITORY_COMMIT_HISTORY, variables)
++        return _extract_history_connection(data)
++
++    async for node in paginate(fetch):
++        yield CommitHeader.from_graphql_node(node, repo=repo.full_name)
++
++
++def _extract_history_connection(data: dict) -> dict:
++    """
++    Достать {"pageInfo": ..., "nodes": ...} из глубоко вложенного ответа
++    repository.object.history. Если ветка существует, но почему-то не
++    резолвится в Commit (не должно случаться для валидного default_branch,
++    но GraphQL не гарантирует этого статически) — возвращаем пустую
++    connection вместо падения, пагинатор корректно остановится сам.
++    """
++    repository_node = data.get("repository") or {}
++    target = repository_node.get("object") or {}
++    history = target.get("history")
++    if history is None:
++        return {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}
++    return history
+\ No newline at end of file
+diff --git a/src/github/models.py b/src/github/models.py
+new file mode 100644
+index 0000000..8a22307
+--- /dev/null
++++ b/src/github/models.py
+@@ -0,0 +1,163 @@
++"""
++Доменные модели транспортного слоя GitHub Engine.
++
++Важно: это НЕ то же самое, что src/models/models.py (Commit, AnalysisResult,
++CompactResult). Те — финальный формат для LLM/кеша, собранный normalizer'ом
++из данных любого источника. Эти — сырьё, как оно приходит с транспорта
++(GraphQL/REST), и ничего не знают о сжатии, LLM или Telegram.
++
++Разделение по весу — сознательное архитектурное решение (см. roadmap):
++    Repository    — метаданные репозитория, дёшево получить пачками
++    CommitHeader  — лёгкий: дата, subject, статистика, БЕЗ списка файлов.
++                    Можно скачать тысячи штук одним GraphQL-походом.
++    CommitDetails — тяжёлый: список файлов с patch. Требует отдельного
++                    REST-запроса на каждый коммит — тянется только тогда,
++                    когда CommitHeader показал, что это действительно нужно.
++"""
++
++from __future__ import annotations
++
++from datetime import datetime
++
++from pydantic import BaseModel, Field
++
++
++def _parse_datetime(value: str | None) -> datetime | None:
++    """GitHub отдаёт ISO8601 с суффиксом 'Z' — datetime.fromisoformat его не ест напрямую."""
++    if value is None:
++        return None
++    return datetime.fromisoformat(value.replace("Z", "+00:00"))
++
++
++class Repository(BaseModel):
++    """Репозиторий — метаданные, без коммитов."""
++
++    owner: str
++    name: str
++    pushed_at: datetime | None = None
++    is_fork: bool = False
++    default_branch: str | None = None
++
++    @property
++    def full_name(self) -> str:
++        return f"{self.owner}/{self.name}"
++
++    @classmethod
++    def from_graphql_node(cls, node: dict) -> "Repository":
++        """
++        Собрать Repository из узла GraphQL-ответа (см. queries.py,
++        USER_REPOSITORIES_WITH_HISTORY). Ожидаемая форма узла:
++            {
++                "name": "...",
++                "owner": {"login": "..."},
++                "pushedAt": "2026-01-01T00:00:00Z",
++                "isFork": false,
++                "defaultBranchRef": {"name": "main", "target": {...}}
++            }
++        """
++        owner_login = (node.get("owner") or {}).get("login", "")
++        default_branch_ref = node.get("defaultBranchRef") or {}
++        return cls(
++            owner=owner_login,
++            name=node["name"],
++            pushed_at=_parse_datetime(node.get("pushedAt")),
++            is_fork=bool(node.get("isFork", False)),
++            default_branch=default_branch_ref.get("name"),
++        )
++
++
++class CommitHeader(BaseModel):
++    """
++    Лёгкое представление коммита — без файлов. Этого достаточно для
++    большинства решений: фильтрации мёржей, подсчёта статистики,
++    отображения в сводке. Список файлов (CommitDetails) добирается
++    отдельно и только при необходимости.
++    """
++
++    sha: str
++    date: datetime
++    message: str
++    repo: str = ""  # full_name репозитория — проставляется normalizer'ом при сборке
++    additions: int = 0
++    deletions: int = 0
++    changed_files: int = 0
++    parents_count: int = 0
++
++    @property
++    def is_merge(self) -> bool:
++        """
++        Мёрж-коммиты (>1 родителя) исторически исключались из статистики
++        (см. старый core/collector.py: `if len(commit.parents) > 1: continue`).
++        GraphQL не отдаёт список родителей бесплатно — нужно явно запросить
++        `parents { totalCount }` в queries.py, иначе parents_count всегда 0
++        и is_merge будет ложно-отрицательным.
++        """
++        return self.parents_count > 1
++
++    @classmethod
++    def from_graphql_node(cls, node: dict, *, repo: str = "") -> "CommitHeader":
++        """
++        Собрать CommitHeader из узла history.nodes GraphQL-ответа.
++        Ожидаемая форма узла:
++            {
++                "oid": "abc123...",
++                "committedDate": "2026-01-01T12:00:00Z",
++                "messageHeadline": "fix: ...",
++                "additions": 12,
++                "deletions": 3,
++                "changedFilesIfAvailable": 2,
++                "parents": {"totalCount": 1}
++            }
++        """
++        parents = node.get("parents") or {}
++        changed_files = node.get("changedFilesIfAvailable")
++        if changed_files is None:
++            changed_files = node.get("changedFiles", 0)
++
++        return cls(
++            sha=node["oid"],
++            date=_parse_datetime(node["committedDate"]),
++            message=node.get("messageHeadline", ""),
++            repo=repo,
++            additions=node.get("additions") or 0,
++            deletions=node.get("deletions") or 0,
++            changed_files=changed_files or 0,
++            parents_count=parents.get("totalCount", 0),
++        )
++
++
++class FileDiff(BaseModel):
++    """Один изменённый файл — часть CommitDetails."""
++
++    filename: str
++    additions: int = 0
++    deletions: int = 0
++    patch: str | None = None
++
++
++class CommitDetails(BaseModel):
++    """
++    Тяжёлое представление коммита — файлы и патчи. GraphQL не отдаёт patch
++    вообще, поэтому это всегда результат REST-запроса
++    (GET /repos/{owner}/{repo}/commits/{sha}), а не GraphQL.
++    """
++
++    sha: str
++    files: list[FileDiff] = Field(default_factory=list)
++
++    @classmethod
++    def from_rest_payload(cls, payload: dict) -> "CommitDetails":
++        """
++        Собрать CommitDetails из ответа REST-эндпоинта
++        GET /repos/{owner}/{repo}/commits/{sha}.
++        """
++        files = [
++            FileDiff(
++                filename=f.get("filename", ""),
++                additions=f.get("additions", 0) or 0,
++                deletions=f.get("deletions", 0) or 0,
++                patch=f.get("patch"),
++            )
++            for f in payload.get("files" or [])
++        ]
++        return cls(sha=payload.get("sha", ""), files=files)
+\ No newline at end of file
+diff --git a/src/github/paginator.py b/src/github/paginator.py
+new file mode 100644
+index 0000000..7e3618e
+--- /dev/null
++++ b/src/github/paginator.py
+@@ -0,0 +1,100 @@
++"""
++Курсорный пагинатор — общий для любых GraphQL connection'ов
++(repositories, commit history и т.д.).
++
++Не знает ничего про конкретный запрос или форму вложенности ответа —
++принимает callable, который по курсору возвращает уже извлечённый
++connection-объект {"pageInfo": {...}, "nodes": [...]}. Извлечение из
++специфичной вложенности (user.repositories, repository.object.history)
++— забота вызывающего кода (graphql.py), а не паджинатора. Это то, что
++позволяет одному и тому же paginate() обслуживать оба запроса из
++queries.py без единой строчки, знающей об их структуре.
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator, Awaitable, Callable
++
++from src.logger import get_logger
++
++logger = get_logger(__name__)
++
++# fetch_page(after) -> {"pageInfo": {"hasNextPage": bool, "endCursor": str | None}, "nodes": [...]}
++FetchPage = Callable[[str | None], Awaitable[dict]]
++
++# Защитный потолок: если hasNextPage почему-то всегда True (баг API,
++# сломанный курсор, кольцевая пагинация) — не крутимся вечно и не жжём
++# rate limit впустую, а падаем с понятной ошибкой вместо зависания.
++_DEFAULT_MAX_PAGES = 1000
++
++
++class PaginationError(Exception):
++    """Пагинация превысила максимально разумное число страниц."""
++
++
++async def paginate(
++    fetch_page: FetchPage, *, max_pages: int = _DEFAULT_MAX_PAGES
++) -> AsyncIterator[dict]:
++    """
++    Асинхронно отдаёт узлы (nodes) постранично, скрывая курсорную логику.
++
++    Использование:
++        async def fetch(after):
++            data = await client.graphql(query, {"login": login, "after": after})
++            return data["user"]["repositories"]
++
++        async for node in paginate(fetch):
++            ...
++
++    Стримит узлы по мере получения страниц — не держит весь результат
++    в памяти сразу, что важно для истории коммитов (потенциально тысячи
++    узлов), в отличие от репозиториев (обычно десятки-сотни, см. collect_all).
++    """
++    after: str | None = None
++    page_count = 0
++
++    while True:
++        page_count += 1
++        if page_count > max_pages:
++            raise PaginationError(
++                f"Превышен лимит страниц ({max_pages}) — похоже на "
++                f"бесконечную пагинацию (сломанный курсор или баг API)."
++            )
++
++        connection = await fetch_page(after)
++        nodes = connection.get("nodes") or []
++
++        for node in nodes:
++            if node is not None:
++                # GraphQL иногда отдаёт null-элементы в списках при
++                # частичных ошибках (partial response) — пропускаем,
++                # не роняя всю пагинацию из-за одного плохого узла.
++                yield node
++
++        page_info = connection.get("pageInfo") or {}
++        if not page_info.get("hasNextPage"):
++            return
++
++        after = page_info.get("endCursor")
++        if after is None:
++            # hasNextPage=True, но курсора нет — противоречивый ответ API.
++            # Продолжать пагинацию некуда; лучше остановиться явно с
++            # предупреждением в логах, чем уйти в бесконечный цикл с
++            # after=None (что просто повторило бы первую страницу).
++            logger.warning(
++                "paginate: hasNextPage=True, но endCursor отсутствует — "
++                "останавливаюсь, чтобы не зациклиться"
++            )
++            return
++
++
++async def collect_all(
++    fetch_page: FetchPage, *, max_pages: int = _DEFAULT_MAX_PAGES
++) -> list[dict]:
++    """
++    Материализовать все страницы в список — удобно для небольших
++    connection'ов (например, список репозиториев пользователя).
++    Для потенциально больших connection'ов (история коммитов)
++    предпочтительнее использовать paginate() напрямую как стрим.
++    """
++    return [node async for node in paginate(fetch_page, max_pages=max_pages)]
+\ No newline at end of file
+diff --git a/src/github/queries.py b/src/github/queries.py
+new file mode 100644
+index 0000000..e6f9bca
+--- /dev/null
++++ b/src/github/queries.py
+@@ -0,0 +1,128 @@
++"""
++GraphQL-запросы GitHub Engine.
++
++Два запроса, сознательно не один:
++    USER_REPOSITORIES         — список репозиториев пользователя с метаданными
++                                (нужны, чтобы решить, какие вообще трогать —
++                                см. repo-level кеш по pushedAt, Квест 3.3).
++    REPOSITORY_COMMIT_HISTORY — история коммитов ОДНОГО репозитория.
++
++Почему не один запрос сразу на всё: GraphQL позволяет пагинировать только
++"плоские" connection'ы. Если попытаться получить репозитории и вложенную
++историю коммитов каждого репозитория одним запросом, для репозиториев
++с историей длиннее одной страницы (first: 100) продолжить пагинацию
++именно этой вложенной connection'и без повторного похода за каждым репо
++отдельно — нельзя. Поэтому pipeline двухступенчатый:
++    1. пагинируем repositories (paginator.py, свой курсор)
++    2. для repositories, которым это нужно, пагинируем history отдельно
++       (свой курсор на каждый репозиторий)
++
++Оба запроса включают `rateLimit { remaining resetAt cost }` — это
++единственный способ узнать реальную стоимость GraphQL-запроса (GraphQL,
++в отличие от REST, не отдаёт лимиты в заголовках ответа).
++GitHubClient._maybe_report_graphql_limit() автоматически читает этот
++блок из ответа и обновляет TokenPool — вызывающему коду ничего
++дополнительно делать не нужно.
++
++Постраничность (pageInfo/after) исполняется paginator.py — сами запросы
++здесь только объявляют форму данных и ничего не знают о циклах.
++"""
++
++from __future__ import annotations
++
++# Размер одной страницы для обеих connection'ов. Один и тот же размер
++# для простоты — при необходимости точечно потюнить для history
++# (например, из-за более дорогого cost) это можно разнести на два
++# отдельных значения, но пока нет данных, что это нужно.
++PAGE_SIZE = 100
++
++
++USER_REPOSITORIES = f"""
++query($login: String!, $after: String) {{
++  user(login: $login) {{
++    repositories(
++      first: {PAGE_SIZE}
++      after: $after
++      ownerAffiliations: OWNER
++      orderBy: {{ field: PUSHED_AT, direction: DESC }}
++    ) {{
++      pageInfo {{ hasNextPage endCursor }}
++      nodes {{
++        name
++        owner {{ login }}
++        pushedAt
++        isFork
++        defaultBranchRef {{ name }}
++      }}
++    }}
++  }}
++  rateLimit {{ remaining resetAt cost }}
++}}
++"""
++
++
++REPOSITORY_COMMIT_HISTORY = f"""
++query(
++  $owner: String!
++  $name: String!
++  $branch: String!
++  $since: GitTimestamp
++  $after: String
++) {{
++  repository(owner: $owner, name: $name) {{
++    object(expression: $branch) {{
++      ... on Commit {{
++        history(first: {PAGE_SIZE}, after: $after, since: $since) {{
++          pageInfo {{ hasNextPage endCursor }}
++          nodes {{
++            oid
++            committedDate
++            messageHeadline
++            additions
++            deletions
++            changedFilesIfAvailable
++            parents {{ totalCount }}
++          }}
++        }}
++      }}
++    }}
++  }}
++  rateLimit {{ remaining resetAt cost }}
++}}
++"""
++# ВАЖНО: `parents { totalCount }` — обязательное поле. Без него
++# CommitHeader.parents_count всегда останется 0, и is_merge будет
++# ложно-отрицательным для всех коммитов (см. models.py). Не убирать
++# при рефакторинге запроса, даже если кажется, что поле "не используется".
++
++
++def user_repositories_variables(login: str, *, after: str | None = None) -> dict:
++    """Переменные для USER_REPOSITORIES."""
++    return {"login": login, "after": after}
++
++
++def repository_commit_history_variables(
++    owner: str,
++    name: str,
++    branch: str,
++    *,
++    since: str | None = None,
++    after: str | None = None,
++) -> dict:
++    """
++    Переменные для REPOSITORY_COMMIT_HISTORY.
++
++    branch — expression для GraphQL `object(expression: ...)`, обычно
++    имя дефолтной ветки без префикса (например "main"), т.е. значение
++    Repository.default_branch из models.py.
++    since — ISO8601-строка (GitTimestamp), например "2024-01-01T00:00:00Z".
++    Передача since вместо REST-фильтрации по клиенту — намеренная замена
++    старой логики `since=` параметра в PyGithub-collector'е.
++    """
++    return {
++        "owner": owner,
++        "name": name,
++        "branch": branch,
++        "since": since,
++        "after": after,
++    }
+\ No newline at end of file
+diff --git a/src/github/ratelimit.py b/src/github/ratelimit.py
+new file mode 100644
+index 0000000..4d505f1
+--- /dev/null
++++ b/src/github/ratelimit.py
+@@ -0,0 +1,136 @@
++"""
++RateLimiter — стратегия "ждать или идти" поверх TokenPool.
++
++Разделение ответственности:
++    TokenPool  — хранит состояние токенов и умеет выбрать лучший.
++    RateLimiter — решает, достаточно ли лимита у выбранного токена
++                  ПРЯМО СЕЙЧАС, и если нет — ждёт до reset_at (с потолком),
++                  прежде чем отдать токен вызывающему коду.
++
++Смысл: воркер (и даже GitHubClient) не должен думать о лимитах вообще —
++он просто вызывает limiter.acquire() и получает готовый к использованию
++токен, либо (в крайнем случае) ждёт разумное время.
++
++Важно: это НЕ встроено в retry-цикл GitHubClient (см. client.py) —
++там нужен быстрый fail-fast с явной ошибкой наверх, а не сон на
++reset_at внутри уже начатого запроса. RateLimiter подключается на
++уровне пайплайна (Акт 3 / service.py) как admission control перед
++стартом партии запросов — это другая ответственность.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import re
++import time
++
++from src.github.auth import ApiKind, TokenHandle, TokenPool
++from src.logger import get_logger
++
++
++logger = get_logger(__name__)
++
++# Официальная формула GitHub для GraphQL rate limit cost:
++# https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
++# "each first or last argument... adds (value / 100), minimum 1, per connection".
++# Это не точный парсер AST — регулярка ищет все first:/last: в тексте запроса.
++# Используется ТОЛЬКО как pre-flight эвристика, чтобы не пытаться идти
++# уже истощённым токеном. Настоящая цена приходит от GitHub в ответе
++# (rateLimit.cost) и именно она пишется в TokenPool через client.py.
++_CONNECTION_ARG_RE = re.compile(r"(?:first|last)\s*:\s*(\d+)")
++
++
++def estimate_graphql_cost(query: str) -> int:
++    """
++    Грубая оценка стоимости GraphQL-запроса до отправки.
++
++    Ограничения (сознательно, не скрываем):
++      - не учитывает фактическую вложенность полей и переиспользование
++        объектов между connection'ами;
++      - не учитывает alias-батчинг из Акта 3.5 — там потребуется более
++        точный расчёт, это отдельный будущий квест;
++      - если в запросе нет first/last (например, простой viewer{login}),
++        возвращает 1 — минимально возможную стоимость.
++
++    Никогда не используется как источник истины для TokenPool — только
++    как основание для "стоит ли вообще пробовать этим токеном сейчас".
++    """
++    matches = _CONNECTION_ARG_RE.findall(query)
++    if not matches:
++        return 1
++    return max(1, sum(max(1, int(value) // 100) for value in matches))
++
++
++class RateLimiter:
++    """
++    Использование:
++        limiter = RateLimiter(token_pool)
++        handle = await limiter.acquire("graphql", estimated_cost=5)
++        # ... запрос ...
++        await handle.report(remaining=..., reset_at=...)
++
++    min_remaining_buffer — не тратим лимит "под ноль": если после запроса
++    останется меньше буфера, предпочитаем подождать более свежий токен
++    (или reset), чтобы не спровоцировать secondary rate limit / abuse
++    detection от GitHub, которая срабатывает и на легитимный, но слишком
++    плотный трафик.
++
++    max_wait_seconds — потолок одного ожидания. Если и после этого лимит
++    не восстановился (например, множественные токены исчерпаны надолго),
++    вызывающий код получит токен всё равно и естественным образом поймает
++    RateLimitExceeded от GitHubClient — лучше явная ошибка, чем зависший
++    воркер на час.
++    """
++
++    def __init__(
++        self,
++        pool: TokenPool,
++        *,
++        min_remaining_buffer: int = 50,
++        max_wait_seconds: float = 300.0,
++    ) -> None:
++        self._pool = pool
++        self._buffer = min_remaining_buffer
++        self._max_wait = max_wait_seconds
++
++    async def acquire(self, api: ApiKind, *, estimated_cost: int = 1) -> TokenHandle:
++        """
++        Вернуть токен, у которого (по последним известным данным)
++        точно хватит лимита на estimated_cost. При необходимости ждёт,
++        но не дольше max_wait_seconds за одну попытку.
++        """
++        while True:
++            handle = await self._pool.acquire(api)
++            remaining, reset_at = await self._pool.peek(handle.value, api)
++            wait_for = self._compute_wait(remaining, reset_at, estimated_cost)
++
++            if wait_for <= 0:
++                return handle
++
++            sleep_for = min(wait_for, self._max_wait)
++            logger.info(
++                f"rate limiter: жду {sleep_for:.1f}s перед {api} "
++                f"(remaining={remaining}, estimated_cost={estimated_cost})"
++            )
++            await asyncio.sleep(sleep_for)
++
++    def _compute_wait(
++        self, remaining: int | None, reset_at: float, estimated_cost: int
++    ) -> float:
++        """
++        0.0 — можно идти прямо сейчас.
++        >0.0 — сколько секунд подождать (потолок max_wait применяется
++        в acquire(), не здесь — чтобы _compute_wait оставался чистой
++        функцией без побочных эффектов, это упрощает тестирование).
++        """
++        if remaining is None:
++            return 0.0
++
++        if remaining - self._buffer >= estimated_cost:
++            return 0.0
++
++        now = time.time()
++        if reset_at <= now:
++            return 0.0
++
++        return reset_at - now
+\ No newline at end of file
+diff --git a/src/github/rest.py b/src/github/rest.py
+new file mode 100644
+index 0000000..08bf444
+--- /dev/null
++++ b/src/github/rest.py
+@@ -0,0 +1,24 @@
++"""
++REST-добор деталей коммита — файлы и patch, которых GraphQL не отдаёт
++в принципе (в схеме GitHub GraphQL просто нет поля patch на файле).
++
++Используется только для коммитов, прошедших фильтр needs_rest_details() —
++то есть не для каждого коммита подряд, а только там, где
++CommitHeader уже показал, что в коммите реально есть изменённые файлы.
++Это и есть основная экономия запросов по сравнению со старым
++PyGithub-collector'ом, который ходил в REST за файлами для КАЖДОГО
++коммита без разбора.
++"""
++
++from __future__ import annotations
++
++from src.github.client import GitHubClient
++from src.github.models import CommitDetails
++
++
++async def get_commit_details(
++    client: GitHubClient, owner: str, name: str, sha: str
++) -> CommitDetails:
++    """GET /repos/{owner}/{name}/commits/{sha} -> CommitDetails (файлы + patch)."""
++    payload = await client.get(f"/repos/{owner}/{name}/commits/{sha}")
++    return CommitDetails.from_rest_payload(payload or {})
+\ No newline at end of file
+diff --git a/src/github/service.py b/src/github/service.py
+new file mode 100644
+index 0000000..e28129c
+--- /dev/null
++++ b/src/github/service.py
+@@ -0,0 +1,80 @@
++"""
++Публичный фасад GitHub Engine — единственная точка входа для остального
++проекта (collector/worker). Здесь и только здесь сходятся GraphQL, REST
++и фильтрация. Снаружи src/github/ никто не должен импортировать
++client.py, graphql.py, rest.py, filters.py напрямую — только этот файл.
++
++Это то, что в плане рефакторинга называлось "Collector вообще ничего
++не знает про GitHub API. Он знает только github.list_repositories(),
++github.get_commit_history(), github.enrich_with_details()".
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator
++
++from src.github.client import GitHubClient, get_github_client
++from src.github.filters import RestDetailsPolicy, needs_rest_details
++from src.github.graphql import get_commit_history as _get_commit_history
++from src.github.graphql import list_repositories as _list_repositories
++from src.github.models import CommitDetails, CommitHeader, Repository
++from src.github.rest import get_commit_details as _get_commit_details
++
++
++class GitHubService:
++    """
++    Использование:
++        service = await get_github_service()
++        repos = await service.list_repositories("torvalds")
++        async for header in service.get_commit_history(repos[0]):
++            details = await service.enrich_with_details(repos[0], header)
++    """
++
++    def __init__(
++        self, client: GitHubClient, *, rest_policy: RestDetailsPolicy | None = None
++    ) -> None:
++        self._client = client
++        self._rest_policy = rest_policy or RestDetailsPolicy()
++
++    async def list_repositories(self, login: str) -> list[Repository]:
++        """Все репозитории пользователя (владелец). Форки не фильтрует."""
++        return await _list_repositories(self._client, login)
++
++    async def get_commit_history(
++        self, repo: Repository, *, since: str | None = None
++    ) -> AsyncIterator[CommitHeader]:
++        """
++        Стримит CommitHeader по одному репозиторию, УЖЕ без мёрж-коммитов —
++        это единственное место, где применяется фильтр is_merge, так что
++        вызывающему коду (collector) не нужно про него помнить.
++        """
++        async for header in _get_commit_history(self._client, repo, since=since):
++            if header.is_merge:
++                continue
++            yield header
++
++    async def enrich_with_details(
++        self, repo: Repository, header: CommitHeader
++    ) -> CommitDetails | None:
++        """
++        Вернуть файлы коммита, если needs_rest_details() решил, что это
++        оправдано. None означает "REST не нужен" — вызывающий код просто
++        работает с тем, что уже есть в CommitHeader, без списка файлов.
++        """
++        if not needs_rest_details(header, policy=self._rest_policy):
++            return None
++        return await _get_commit_details(
++            self._client, repo.owner, repo.name, header.sha
++        )
++
++
++_service: GitHubService | None = None
++
++
++async def get_github_service() -> GitHubService:
++    """Ленивый синглтон на процесс, по аналогии с get_github_client()."""
++    global _service
++    if _service is None:
++        client = await get_github_client()
++        _service = GitHubService(client)
++    return _service
+\ No newline at end of file
+diff --git a/test_worker.py b/test_worker.py
+deleted file mode 100644
+index 1999497..0000000
+--- a/test_worker.py
++++ /dev/null
+@@ -1,17 +0,0 @@
+-import asyncio
+-from arq import create_pool
+-from arq.connections import RedisSettings
+-
+-
+-async def test():
+-    pool = await create_pool(RedisSettings(host="localhost", port=6379, database=0))
+-    job = await pool.enqueue_job("analyze_github_user", "mageri9", "2024-01-01")
+-    print(f"Job ID: {job.job_id}")
+-
+-    result = await job.result(timeout=120)
+-    print(f"Status: {result['status']}")
+-    if result.get("result_json"):
+-        print(f"Data: {len(result['result_json'])} chars")
+-
+-
+-asyncio.run(test())
+\ No newline at end of file
+diff --git a/tests/manual_smoke_enqueue.py b/tests/manual_smoke_enqueue.py
+new file mode 100644
+index 0000000..f8b86dc
+--- /dev/null
++++ b/tests/manual_smoke_enqueue.py
+@@ -0,0 +1,28 @@
++"""
++Ручной smoke-тест: ставит реальную задачу в очередь arq и ждёт результат.
++
++Не является pytest-тестом (требует живого Redis + запущенного воркера).
++Используется для быстрой проверки пайплайна руками при разработке:
++
++    python -m arq src.worker.settings.WorkerSettings &
++    python tests/manual_smoke_enqueue.py
++"""
++
++import asyncio
++from arq import create_pool
++from arq.connections import RedisSettings
++
++
++async def main():
++    pool = await create_pool(RedisSettings(host="localhost", port=6379, database=0))
++    job = await pool.enqueue_job("analyze_github_user", "mageri9", "2024-01-01")
++    print(f"Job ID: {job.job_id}")
++
++    result = await job.result(timeout=120)
++    print(f"Status: {result['status']}")
++    if result.get("result_json"):
++        print(f"Data: {len(result['result_json'])} chars")
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+\ No newline at end of file
