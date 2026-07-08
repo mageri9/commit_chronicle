@@ -32,4 +32,7 @@ class WorkerSettings:
     @staticmethod
     async def on_shutdown(ctx):
         from src.storage.redis import close_redis
+        from src.github.client import close_github_client
+
         await close_redis()
+        await close_github_client()

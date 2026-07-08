@@ -1,209 +1,164 @@
 """
-Commit Chronicle — минимальный сборщик фактов (FAST edition)
-Параллельная обработка + фильтр мёртвых репозиториев
+Collector — сбор коммитов через GitHub Engine (src/github/).
+
+Единственный collector в проекте с завершения миграции (Акт 4).
+Старый PyGithub-based collector и src/core/token_rotator.py удалены
+в финальной зачистке — см. docs/adr/001-github-engine.md.
+
+Известное ограничение: RateLimiter из src/github/ratelimit.py сюда
+ещё не подключён как admission control перед стартом партии запросов —
+за паузы при исчерпании лимита отвечает только retry-цикл внутри
+GitHubClient (быстрый fail-fast, не sleep до reset_at). Подключение
+RateLimiter на уровне этого пайплайна — отдельная будущая задача.
 """
 
-import json
-import os
-import sys
+from __future__ import annotations
+
+import asyncio
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from github import GithubException, RateLimitExceededException
-from dotenv import load_dotenv
+
+from src.core.exceptions import CollectorError, RepoAccessError
+from src.github.exceptions import GitHubAPIError, RateLimitExceeded
+from src.github.models import CommitHeader, Repository
+from src.github.service import GitHubService, get_github_service
 from src.logger import get_logger
-
-from src.core.normalizer import normalize
-from src.core.token_rotator import token_rotator
-from src.models import AnalysisResult
-from src.core.exceptions import (
-    RateLimitError,
-    TokenExhaustedError,
-    RepoAccessError,
-    CollectorError,
-)
-
-
-load_dotenv()
+from src.models.models import AnalysisResult, Commit, FileChange
 
 logger = get_logger(__name__)
 
+_DEFAULT_CONCURRENCY = 10
 
-def process_single_repo(
-    repo, username: str, since: datetime, since_date: str, index: int, total: int
-) -> dict | None:
-    """Обрабатывает один репозиторий (для параллельного выполнения)"""
 
-    logger.info(f"[{index}/{total}] 📁 Начало обработки {repo.full_name}")
+async def _process_single_repo(
+    service: GitHubService,
+    repo: Repository,
+    since_iso: str,
+    semaphore: asyncio.Semaphore,
+    index: int,
+    total: int,
+) -> list[Commit]:
+    """
+    Собрать все коммиты одного репозитория.
 
-    try:
-        commits_manifest = []
-        commits = repo.get_commits(author=username, since=since)
+    Мёрж-коммиты и коммиты чужих авторов уже отфильтрованы внутри
+    service.get_commit_history() — здесь про них ничего знать не нужно.
+    """
+    async with semaphore:
+        logger.info(f"[{index}/{total}] 📁 Начало обработки {repo.full_name}")
 
-        for commit in commits:
-            if len(commit.parents) > 1:
-                continue
+        try:
+            headers: list[CommitHeader] = [
+                h async for h in service.get_commit_history(repo, since=since_iso)
+            ]
 
-            manifest = {
-                "hash": commit.sha[:7],
-                "date": commit.commit.author.date.isoformat(),
-                "message": commit.commit.message.split("\n")[0],
-                "files": {},
-            }
+            if not headers:
+                logger.info(f"[{index}/{total}] 📁 {repo.full_name}: ⏭️ Нет коммитов")
+                return []
 
-            for file in commit.files or []:
-                manifest["files"][file.filename] = {
-                    "+": file.additions or 0,
-                    "-": file.deletions or 0,
-                }
+            commits: list[Commit] = []
+            for header in headers:
+                files: list[FileChange] = []
+                details = await service.enrich_with_details(repo, header)
+                if details is not None:
+                    files = [
+                        FileChange(
+                            filename=f.filename,
+                            additions=f.additions,
+                            deletions=f.deletions,
+                        )
+                        for f in details.files
+                    ]
 
-            commits_manifest.append(manifest)
+                commits.append(
+                    Commit(
+                        hash=header.sha[:7],
+                        date=header.date,
+                        message=header.message,
+                        repo=repo.full_name,
+                        files=files,
+                    )
+                )
 
-        if commits_manifest:
             logger.info(
-                f"[{index}/{total}] 📁 {repo.full_name}: ✅ Найдено коммитов: {len(commits_manifest)}"
+                f"[{index}/{total}] 📁 {repo.full_name}: ✅ Найдено коммитов: {len(commits)}"
             )
-            return {
-                "repo": repo.full_name,
-                "period": f"{since_date}..{datetime.now().strftime('%Y-%m-%d')}",
-                "commits": commits_manifest,
-            }
-        else:
-            logger.info(f"[{index}/{total}] 📁 {repo.full_name}: ⏭️ Нет коммитов")
-            return None
+            return commits
 
-    except GithubException as e:
-        if e.status in (403, 404):
+        except RateLimitExceeded:
+            raise
+
+        except GitHubAPIError as e:
+            status = e.status_code
+            if status in (403, 404):
+                logger.warning(
+                    f"[{index}/{total}] 📁 {repo.full_name}: ❌ Доступ запрещён ({status})"
+                )
+                raise RepoAccessError(repo.full_name, status)
             logger.warning(
-                f"[{index}/{total}] 📁 {repo.full_name}: ❌ Доступ запрещён ({e.status})"
+                f"[{index}/{total}] 📁 {repo.full_name}: ❌ Ошибка API {status}: {e}"
             )
-            raise RepoAccessError(repo.full_name, e.status)
+            raise CollectorError(f"GitHub API error {status}: {e}")
 
-        logger.warning(
-            f"[{index}/{total}] 📁 {repo.full_name}: ❌ Ошибка API {e.status}"
-        )
-        raise CollectorError(f"GitHub API error: {e.status}")
-
-    except Exception as e:
-        logger.warning(
-            f"[{index}/{total}] 📁 {repo.full_name}: ❌ {type(e).__name__}: {e}"
-        )
-        raise CollectorError(str(e))
+        except Exception as e:
+            logger.warning(
+                f"[{index}/{total}] 📁 {repo.full_name}: ❌ {type(e).__name__}: {e}"
+            )
+            raise CollectorError(str(e))
 
 
-def collect_commits(
-    username: str, since_date: str, max_workers: int = 10
+async def collect_commits(
+    username: str, since_date: str, max_concurrency: int = _DEFAULT_CONCURRENCY
 ) -> AnalysisResult:
-    g = token_rotator.get_client()
+    """
+    Собрать коммиты пользователя через GitHub Engine.
 
-    # Проверяем лимиты
-    try:
-        rate_limit = g.get_rate_limit()
-        remaining = rate_limit.resources.core.remaining
+    since_date — "YYYY-MM-DD". Конвертируется в полный ISO8601 для
+    GraphQL $since: GitTimestamp внутри (см. src/github/queries.py).
+    """
+    service = await get_github_service()
 
-        logger.info(f"📡 API запросов осталось: {remaining}")
-
-        if remaining < 10:
-            raise TokenExhaustedError(
-                f"Осталось всего {remaining} запросов. Нужен новый токен."
-            )
-    except TokenExhaustedError:
-        raise
-    except Exception as e:
-        logger.error(f"⚠️ Не удалось проверить лимиты: {e}")
-
-    user = g.get_user(username)
-
-    # ГЛАВНАЯ ОПТИМИЗАЦИЯ: фильтруем по pushed_at
     since = datetime.strptime(since_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    all_repos = [r for r in user.get_repos() if not r.fork]
-    active_repos = [r for r in all_repos if r.pushed_at and r.pushed_at >= since]
+    since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    all_repos = await service.list_repositories(username)
+    active_repos = [
+        r for r in all_repos if not r.is_fork and r.pushed_at and r.pushed_at >= since
+    ]
     skipped = len(all_repos) - len(active_repos)
 
     logger.info(f"📂 Всего репозиториев: {len(all_repos)}")
     logger.info(
         f"📂 Активных с {since_date}: {len(active_repos)} (пропущено: {skipped})"
     )
-    logger.info(f"⚡ Параллельных потоков: {max_workers}\n")
+    logger.info(f"⚡ Максимальная конкурентность: {max_concurrency}\n")
 
-    all_manifests = []
+    semaphore = asyncio.Semaphore(max_concurrency)
+    tasks = [
+        _process_single_repo(service, repo, since_iso, semaphore, i, len(active_repos))
+        for i, repo in enumerate(active_repos, 1)
+    ]
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                process_single_repo,
-                repo,
-                username,
-                since,
-                since_date,
-                i,
-                len(active_repos),
-            ): repo
-            for i, repo in enumerate(active_repos, 1)
-        }
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                if result:
-                    all_manifests.append(result)
-            except RateLimitExceededException:
-                token_rotator.block_token(g, duration=3600)
-                logger.warning("❌ Лимит API — токен заблокирован на час")
-                raise RateLimitError("GitHub API rate limit exceeded", retry_after=60)
-            except TokenExhaustedError as e:
-                logger.warning(f"\n⚠️ {e}")
-                executor.shutdown(wait=False, cancel_futures=True)
-                break
-            except RepoAccessError as e:
-                logger.warning(f"⚠️ Пропущен: {e}")
-                continue
-            except CollectorError as e:
-                logger.warning(f"⚠️ Ошибка: {e}")
-                continue
+    all_commits: list[Commit] = []
+    for repo, result in zip(active_repos, results):
+        if isinstance(result, RepoAccessError):
+            logger.warning(f"⚠️ Пропущен: {result}")
+            continue
+        if isinstance(result, RateLimitExceeded):
+            logger.warning(f"⚠️ Rate limit при сборе {repo.full_name}: {result}")
+            continue
+        if isinstance(result, CollectorError):
+            logger.warning(f"⚠️ Ошибка: {result}")
+            continue
+        if isinstance(result, BaseException):
+            logger.warning(f"⚠️ Неожиданная ошибка {repo.full_name}: {result}")
+            continue
+        all_commits.extend(result)
 
-    return normalize(all_manifests, username, since_date)
-
-
-def main():
-    username = os.getenv("GITHUB_USERNAME", "mageri9")
-    since = os.getenv("GITHUB_SINCE", "2024-01-01")
-    workers = int(os.getenv("MAX_WORKERS", "10"))
-
-    if len(sys.argv) > 1:
-        username = sys.argv[1]
-    if len(sys.argv) > 2:
-        since = sys.argv[2]
-    if len(sys.argv) > 3:
-        workers = int(sys.argv[3])
-
-    logger.info(f"\n🚀 Commit Chronicle — сбор коммитов (FAST)")
-    logger.info(f"👤 Пользователь: {username}")
-    logger.info(f"📅 Период: с {since}\n")
-
-    start_time = datetime.now()
-    output_file = "commit_chronicle.json"
-
-    result = collect_commits(username, since, max_workers=workers)
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(
-            result.model_dump(mode="json"),
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-    total_commits = len(result.commits)
-    repo_count = len({c.repo for c in result.commits})
-
-    elapsed = (datetime.now() - start_time).total_seconds()
-
-    logger.info(f"\n{'=' * 50}")
-    logger.info(f"✅ Сохранено в {output_file}")
-    logger.info(f"📊 Репозиториев с коммитами: {repo_count}")
-    logger.info(f"📊 Всего коммитов: {total_commits}")
-    logger.info(f"⏱️ Время выполнения: {elapsed:.1f}s")
-
-
-if __name__ == "__main__":
-    main()
+    return AnalysisResult(
+        username=username,
+        period_start=since_date,
+        commits=all_commits,
+        generated_at=datetime.now(),
+    )

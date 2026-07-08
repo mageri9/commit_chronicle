@@ -3,7 +3,6 @@
 Крашится при запуске если нет обязательных переменных.
 """
 
-from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.logger import get_logger
 
@@ -11,6 +10,26 @@ from src.logger import get_logger
 logger = get_logger(__name__)
 
 PLACEHOLDER_MARKER = "xxx"
+
+
+class LLMSettings(BaseSettings):
+    """
+    Настройки LLM-слоя. Вынесены отдельно от основного Settings,
+    потому что сама функция ещё не реализована (см. README → Роадмап).
+    Когда появится LLM-анализ — этот класс станет обязательным блоком
+    основного Settings, а не будет "прятать" необязательные поля среди
+    критичных production-настроек.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    openai_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
 
 
 class Settings(BaseSettings):
@@ -28,11 +47,6 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
 
-    # LLM — опциональный пока функция не реализована;
-    # TODO: сделать обязательным когда появится LLM-слой
-    openai_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
-
     # Storage
     database_url: str = "sqlite+aiosqlite:///data/app.db"
     redis_url: str
@@ -46,8 +60,7 @@ class Settings(BaseSettings):
     cache_ttl_github: int = 3600
     cache_ttl_llm: int = 86400
 
-    # Paths
-    pdf_output_dir: Path = Path("data/pdf_reports")
+    # Logging
     log_level: str = "INFO"
 
     @property
@@ -63,7 +76,6 @@ class Settings(BaseSettings):
     @property
     def is_configured(self) -> bool:
         """Быстрая проверка, что ключи не из .example."""
-        # openai_api_key не проверяем — опциональный до реализации LLM
         critical_keys = [
             self.github_token,
             self.telegram_bot_token,
@@ -71,9 +83,10 @@ class Settings(BaseSettings):
         return not any(PLACEHOLDER_MARKER in key for key in critical_keys)
 
 
-# Глобальный экземпляр
+# Глобальные экземпляры
 try:
     settings = Settings()
+    llm_settings = LLMSettings()
 except Exception as e:
     logger.error(e)
     raise

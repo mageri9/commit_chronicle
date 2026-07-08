@@ -2,13 +2,13 @@
 Фоновые задачи для arq.
 """
 
-import asyncio
 import json
 from datetime import datetime
 
 from src.config import settings
 from src.core.collector import collect_commits
-from src.core.fingerprint import get_github_fingerprint
+from src.github.fingerprint import get_github_fingerprint
+from src.github.service import get_github_service
 from src.models.models import serialize_result
 from src.storage.database import (
     create_request,
@@ -25,7 +25,7 @@ async def analyze_github_user(
     ctx, username: str, period_start: str, chat_id: str = ""
 ) -> dict:
     """
-    Пайплайн анализа GitHub-пользователя.
+    Пайплайн анализа GitHub-пользователя (GitHub Engine).
 
     Шаги:
         1. Дедупликация — проверить существующий запрос в БД.
@@ -34,21 +34,17 @@ async def analyze_github_user(
         4. Сохранить результат и уведомить бота через pub/sub.
     """
     request_id = ctx["job_id"]
-    # period_end фиксируется в момент старта задачи и используется
-    # как правая граница периода анализа, а не как время завершения.
     period_end = datetime.now().strftime("%Y-%m-%d")
 
     if not chat_id:
         logger.warning(f"[{request_id}] chat_id пустой — уведомление не дойдёт")
 
-    loop = asyncio.get_running_loop()
+    service = await get_github_service()
 
     # 1. Дедупликация — уже анализировали или анализируем?
     existing = await find_existing_requests(username, period_start, period_end)
     if existing:
         if existing["status"] == "processing":
-            # Задача уже в очереди — уведомить бота, чтобы он мог
-            # сообщить пользователю вместо молчаливого игнора.
             await publish(
                 "job:done",
                 json.dumps(
@@ -67,16 +63,9 @@ async def analyze_github_user(
             }
 
         if existing["status"] == "done":
-            # Fingerprint берём до сборки — это «слепок» состояния репо
-            # на момент проверки кэша, а не после тяжёлого collect_commits.
-            current_fp = await loop.run_in_executor(
-                None,
-                get_github_fingerprint,
-                username,
-            )
+            current_fp = await get_github_fingerprint(service, username)
 
             if current_fp and current_fp == existing.get("fingerprint"):
-                # Данные свежие — отдать кэш
                 await create_request(
                     request_id=request_id,
                     username=username,
@@ -120,24 +109,14 @@ async def analyze_github_user(
     await update_request_status(request_id, "processing")
 
     # 3. Fingerprint фиксируем ДО сборки — отражает состояние репо на старте.
-    #    После collect_commits репо могут обновиться, и fingerprint устареет.
-    fingerprint = await loop.run_in_executor(
-        None,
-        get_github_fingerprint,
-        username,
-    )
+    fingerprint = await get_github_fingerprint(service, username)
 
-    # 4. Запустить collector в ThreadPoolExecutor (синхронный PyGithub)
+    # 4. Собрать коммиты
     try:
-        result = await loop.run_in_executor(
-            None,
-            collect_commits,
-            username,
-            period_start,
-            settings.max_workers,
+        result = await collect_commits(
+            username, period_start, max_concurrency=settings.max_workers
         )
 
-        # 5. Успех — сохранить результат и уведомить бота
         result_json = serialize_result(result)
 
         await update_request_status(
@@ -163,7 +142,6 @@ async def analyze_github_user(
             "result_json": result_json,
         }
 
-    # 6. Ошибка — зафиксировать и уведомить бота
     except Exception as e:
         logger.exception(f"[{request_id}] Ошибка сборки для {username}: {e}")
 
