@@ -56,10 +56,6 @@ class Settings(BaseSettings):
     max_requests_per_user: int = 10
     user_cooldown_minutes: int = 30
 
-    # GitHub Engine migration — переключатель между старым
-    # PyGithub-collector'ом (collect_commits) и новым GraphQL-движком
-    use_github_engine_v2: bool = False
-
     # Cache TTL in seconds
     cache_ttl_github: int = 3600
     cache_ttl_llm: int = 86400
