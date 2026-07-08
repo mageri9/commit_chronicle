@@ -122,7 +122,7 @@ def print_report(compact: CompactResult, token_limit: int | None) -> None:
     stats = data_stats(compact)
 
     print(f"\n{SEP}")
-    print(f"  CompactResult — замер токенов")
+    print("  CompactResult — замер токенов")
     print(f"  user={compact.user!r}  from={compact.from_!r}")
     print(SEP)
     print(
