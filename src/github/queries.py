@@ -30,6 +30,8 @@ GitHubClient._maybe_report_graphql_limit() автоматически читае
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 # Размер одной страницы для обеих connection'ов. Один и тот же размер
 # для простоты — при необходимости точечно потюнить для history
 # (например, из-за более дорогого cost) это можно разнести на два
@@ -145,3 +147,75 @@ def repository_commit_history_variables(
         "since": since,
         "after": after,
     }
+
+
+@lru_cache(maxsize=None)
+def build_batch_commit_history_query(count: int) -> str:
+    """
+    Строит GraphQL-запрос с `count` алиасами repository(...), каждый со
+    своим namespaced набором переменных ($owner0, $name0, ... $owner1, ...).
+
+    Кешируется по count — для батчей одинакового размера (все, кроме,
+    как правило, последнего неполного) запрос строится один раз за
+    процесс, а не на каждый вызов.
+
+    Без $after — батчинг рассчитан только на первую страницу истории
+    каждого репозитория (см. src/github/batch.py). Продолжение
+    пагинации после первой страницы делается обычным одиночным
+    REPOSITORY_COMMIT_HISTORY, не батчем.
+    """
+    var_decls = []
+    fields = []
+    for i in range(count):
+        var_decls.append(
+            f"$owner{i}: String! $name{i}: String! $branch{i}: String! "
+            f"$authorId{i}: ID $since{i}: GitTimestamp"
+        )
+        fields.append(
+            f"""
+  repo{i}: repository(owner: $owner{i}, name: $name{i}) {{
+    object(expression: $branch{i}) {{
+      ... on Commit {{
+        history(first: {PAGE_SIZE}, since: $since{i}, author: {{ id: $authorId{i} }}) {{
+          pageInfo {{ hasNextPage endCursor }}
+          nodes {{
+            oid
+            committedDate
+            messageHeadline
+            additions
+            deletions
+            changedFilesIfAvailable
+            parents {{ totalCount }}
+          }}
+        }}
+      }}
+    }}
+  }}"""
+        )
+
+    return (
+        "query(\n  "
+        + "\n  ".join(var_decls)
+        + "\n) {"
+        + "".join(fields)
+        + "\n  rateLimit { remaining resetAt cost }\n}"
+    )
+
+
+def batch_commit_history_variables(
+    items: list[tuple[str, str, str, str, str | None]],
+) -> dict:
+    """
+    items: [(owner, name, branch, author_id, since), ...] — порядок
+    определяет индекс алиаса (repo0, repo1, ...), должен совпадать
+    с порядком, использованным при построении query через
+    build_batch_commit_history_query(len(items)).
+    """
+    variables: dict = {}
+    for i, (owner, name, branch, author_id, since) in enumerate(items):
+        variables[f"owner{i}"] = owner
+        variables[f"name{i}"] = name
+        variables[f"branch{i}"] = branch
+        variables[f"authorId{i}"] = author_id
+        variables[f"since{i}"] = since
+    return variables

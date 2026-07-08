@@ -22,6 +22,8 @@ from src.github.graphql import list_repositories as _list_repositories
 from src.github.models import CommitDetails, CommitHeader, Repository
 from src.github.rest import get_commit_details as _get_commit_details
 from src.github.cache import get_cached_history, set_cached_history
+from src.github.batch import DEFAULT_BATCH_SIZE
+from src.github.batch import fetch_first_pages as _fetch_first_pages
 
 
 class GitHubService:
@@ -87,6 +89,86 @@ class GitHubService:
             yield header
 
         await set_cached_history(repo, headers, author_id=author_id, since=since)
+
+    async def get_commit_history_batch(
+        self, repos: list[Repository], *, since: str | None = None
+    ) -> dict[str, list[CommitHeader]]:
+        """
+        Забрать историю коммитов для нескольких репозиториев ОДНОГО
+        владельца, используя GraphQL aliases batching там, где это
+        возможно. Возвращает {repo.full_name: [CommitHeader, ...]}.
+
+        Те же гарантии, что и у get_commit_history(): без мёрж-коммитов,
+        с repository-level кешем (Квест 3.3), тем же author_id.
+
+        Репозитории с готовым валидным кешем не участвуют в batch-запросе
+        вообще. Репозитории, чья история не поместилась в одну страницу
+        (>PAGE_SIZE коммитов за период), докачиваются обычным потоковым
+        способом через get_commit_history().
+
+        Если батч-запрос для группы репозиториев целиком упал (rate limit,
+        транспортная ошибка) — эти репозитории ПРОПУСКАЮТСЯ (отсутствуют
+        в возвращённом dict, а не присутствуют с пустым списком) — так
+        вызывающий код (collector.py) может отличить "не удалось получить
+        историю" от "коммитов действительно нет".
+        """
+        if not repos:
+            return {}
+
+        owners = {repo.owner for repo in repos}
+        if len(owners) != 1:
+            raise ValueError(
+                "get_commit_history_batch ожидает репозитории одного "
+                f"владельца (author_id общий для всех) — получено: {owners}"
+            )
+        owner = next(iter(owners))
+        author_id = await self._resolve_user_id(owner)
+
+        result: dict[str, list[CommitHeader]] = {}
+        to_fetch: list[Repository] = []
+
+        for repo in repos:
+            if not repo.default_branch:
+                result[repo.full_name] = []
+                continue
+            cached = await get_cached_history(repo, author_id=author_id, since=since)
+            if cached is not None:
+                result[repo.full_name] = cached
+            else:
+                to_fetch.append(repo)
+
+        for i in range(0, len(to_fetch), DEFAULT_BATCH_SIZE):
+            chunk = to_fetch[i : i + DEFAULT_BATCH_SIZE]
+
+            try:
+                batch_results = await _fetch_first_pages(
+                    self._client, chunk, author_id=author_id, since=since
+                )
+            except Exception as e:
+                logger.warning(
+                    f"batch fetch failed for {[r.full_name for r in chunk]}: {e}"
+                )
+                continue  # репозитории чанка остаются отсутствующими в result
+
+            for br in batch_results:
+                if br.has_more:
+                    logger.debug(
+                        f"{br.repo.full_name}: >1 страницы истории — "
+                        f"докачиваю через get_commit_history (без batch)"
+                    )
+                    headers = [
+                        h async for h in self.get_commit_history(br.repo, since=since)
+                    ]
+                    result[br.repo.full_name] = headers
+                    continue
+
+                headers = [h for h in br.headers if not h.is_merge]
+                result[br.repo.full_name] = headers
+                await set_cached_history(
+                    br.repo, headers, author_id=author_id, since=since
+                )
+
+        return result
 
     async def enrich_with_details(
         self, repo: Repository, header: CommitHeader

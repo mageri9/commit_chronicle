@@ -32,29 +32,27 @@ _DEFAULT_CONCURRENCY = 10
 async def _process_single_repo(
     service: GitHubService,
     repo: Repository,
-    since_iso: str,
+    headers: list[CommitHeader],
     semaphore: asyncio.Semaphore,
     index: int,
     total: int,
 ) -> list[Commit]:
     """
-    Собрать все коммиты одного репозитория.
-
-    Мёрж-коммиты и коммиты чужих авторов уже отфильтрованы внутри
-    service.get_commit_history() — здесь про них ничего знать не нужно.
+    Обогащает уже полученные CommitHeader деталями файлов и строит
+    итоговые Commit. История коммитов теперь достаётся ДО этой функции,
+    батчем через GitHubService.get_commit_history_batch (см.
+    collect_commits) — здесь только REST-добор файлов, который
+    по-прежнему делается параллельно по репозиториям через семафор.
+    Мёрж-коммиты и коммиты чужих авторов уже отфильтрованы заранее.
     """
     async with semaphore:
+        if not headers:
+            logger.info(f"[{index}/{total}] 📁 {repo.full_name}: ⏭️ Нет коммитов")
+            return []
+
         logger.info(f"[{index}/{total}] 📁 Начало обработки {repo.full_name}")
 
         try:
-            headers: list[CommitHeader] = [
-                h async for h in service.get_commit_history(repo, since=since_iso)
-            ]
-
-            if not headers:
-                logger.info(f"[{index}/{total}] 📁 {repo.full_name}: ⏭️ Нет коммитов")
-                return []
-
             commits: list[Commit] = []
             for header in headers:
                 files: list[FileChange] = []
@@ -112,8 +110,10 @@ async def collect_commits(
     """
     Собрать коммиты пользователя через GitHub Engine.
 
-    since_date — "YYYY-MM-DD". Конвертируется в полный ISO8601 для
-    GraphQL $since: GitTimestamp внутри (см. src/github/queries.py).
+    История коммитов забирается батчем через GitHubService.get_commit_history_batch
+    (GraphQL aliases batching, см. src/github/batch.py) — вместо одного
+    GraphQL-запроса на каждый репозиторий. REST-добор файлов по-прежнему
+    идёт параллельно по репозиториям (semaphore), это batching не трогает.
     """
     service = await get_github_service()
 
@@ -132,16 +132,31 @@ async def collect_commits(
     )
     logger.info(f"⚡ Максимальная конкурентность: {max_concurrency}\n")
 
+    history_by_repo = await service.get_commit_history_batch(
+        active_repos, since=since_iso
+    )
+
     semaphore = asyncio.Semaphore(max_concurrency)
-    tasks = [
-        _process_single_repo(service, repo, since_iso, semaphore, i, len(active_repos))
-        for i, repo in enumerate(active_repos, 1)
-    ]
+    tasks = []
+    task_repos = []
+    for i, repo in enumerate(active_repos, 1):
+        headers = history_by_repo.get(repo.full_name)
+        if headers is None:
+            logger.warning(
+                f"⚠️ Пропущен (не удалось получить историю): {repo.full_name}"
+            )
+            continue
+        task_repos.append(repo)
+        tasks.append(
+            _process_single_repo(
+                service, repo, headers, semaphore, i, len(active_repos)
+            )
+        )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_commits: list[Commit] = []
-    for repo, result in zip(active_repos, results):
+    for repo, result in zip(task_repos, results):
         if isinstance(result, RepoAccessError):
             logger.warning(f"⚠️ Пропущен: {result}")
             continue
