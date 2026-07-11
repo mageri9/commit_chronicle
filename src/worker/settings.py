@@ -7,6 +7,7 @@ from src.worker.tasks import (
     analyze_github_user,
     handle_push_event,
     reconcile_webhook_repos,
+    silent_background_sync,
 )
 from src.storage.database import init_db, recover_stuck_requests
 from arq.connections import RedisSettings
@@ -22,6 +23,7 @@ class WorkerSettings:
         analyze_github_user,
         handle_push_event,
         reconcile_webhook_repos,
+        silent_background_sync,
     ]
 
     cron_jobs = [cron(reconcile_webhook_repos, hour={0, 6, 12, 18}, minute=0)]

@@ -281,7 +281,7 @@ async def handle_push_event(ctx, payload: dict) -> dict:
     return {"status": "done", "repo": repo_full_name, "commits": total_written}
 
 
-async def reconcile_webhook_repos(ctx) -> dict:
+async def reconcile_webhook_repos(ctx: dict) -> None:
     """
     Периодическая сверка метаданных вебхук-репозиториев (safety-net).
     Группирует активные вебхук-репозитории по analyzed_username и запрашивает
@@ -376,3 +376,32 @@ async def reconcile_webhook_repos(ctx) -> dict:
             f"synced {synced_count} discrepancies."
         )
         return {"checked": checked_count, "synced": synced_count}
+
+
+async def silent_background_sync(ctx: dict, username: str) -> None:
+    """Легковесный фоновый синк репозиториев пользователя без отправки Telegram-уведомлений."""
+    logger.info(f"Starting silent background sync for user: {username}")
+    try:
+        service = await get_github_service()
+        backfill_since_iso = _backfill_start_iso()
+        backfill_since_dt = datetime.strptime(
+            backfill_since_iso, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+
+        all_repos = await service.list_repositories(username)
+        active_repos = [
+            r
+            for r in all_repos
+            if not r.is_fork and r.pushed_at and r.pushed_at >= backfill_since_dt
+        ]
+
+        await sync_user_repos(
+            service,
+            active_repos,
+            username,
+            period_start_iso=backfill_since_iso,
+            max_concurrency=settings.max_workers,
+        )
+        logger.info(f"Silent background sync successfully finished for {username}")
+    except Exception as e:
+        logger.error(f"Silent background sync failed for {username}: {e}")

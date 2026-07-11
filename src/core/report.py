@@ -60,15 +60,16 @@ async def build_analysis_result(
 
 
 async def is_report_fresh(
-    analyzed_username: str, *, max_age_seconds: int = 120
+    analyzed_username: str,
+    *,
+    repo_full_name: str | None = None,  # <-- Добавлен параметр для точечной проверки
+    max_age_seconds: int = 120,
 ) -> bool:
     """
     Грубая проверка "можно ли отдать отчёт мгновенно, без похода в GitHub".
 
-    MVP-эвристика: смотрим max(last_synced_at) по всем отслеживаемым репо
-    юзера — если синхронизировались недавно, считаем данные достаточно
-    свежими для мгновенной выдачи из БД. Более точная версия (сравнение с
-    pushed_at на GitHub) требует сетевого похода и теряет смысл "0.1 секунды".
+    Смотрим last_synced_at по отслеживаемым репо — если синхронизировались
+    недавно, считаем данные достаточно свежими для мгновенной выдачи из БД.
     """
     from src.storage.database import (
         list_tracked_repos,
@@ -77,6 +78,13 @@ async def is_report_fresh(
     repos = await list_tracked_repos(analyzed_username)
     if not repos:
         return False
+
+    # Если запрошен конкретный репозиторий — фильтруем список в Python,
+    # проверяя только его актуальность для мгновенного fast-path
+    if repo_full_name:
+        repos = [r for r in repos if r["repo_full_name"] == repo_full_name]
+        if not repos:
+            return False
 
     now = datetime.now().astimezone()
     for repo in repos:

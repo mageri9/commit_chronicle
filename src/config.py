@@ -49,24 +49,19 @@ class Settings(BaseSettings):
     user_cooldown_minutes: int = 30
 
     max_backfill_days: int = 730
+    fast_path_max_age: int = 120
+
+    max_backfill_days: int = 730
 
     # Cache TTL in seconds
     cache_ttl_github: int = 3600
     cache_ttl_llm: int = 86400
 
     # ---------- Вебхуки ----------
-    # По умолчанию выключено. Включается вручную владельцем бота для СВОИХ
-    # репозиториев (см. src/webhook/register.py) — не требует полноценного
-    # OAuth-флоу, достаточно PAT с правами admin:repo_hook. Для остальных
-    # пользователей бота — см. README, раздел "Вебхуки (опционально)".
     webhook_enabled: bool = False
     webhook_secret: str = ""
-    # Публичный URL, по которому GitHub будет стучаться (reverse-proxy перед
-    # сервисом webhook из docker-compose.yml), например https://example.com/webhook/github
     webhook_public_url: str = ""
     webhook_port: int = 8080
-    # GitHub-логин владельца бота — чьи репозитории регистрируются в
-    # register.py по умолчанию, если не передан явный список.
     owner_github_username: str = ""
 
     # Logging

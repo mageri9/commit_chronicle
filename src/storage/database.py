@@ -562,3 +562,36 @@ async def get_commits(
     async with engine.connect() as conn:
         result = await conn.execute(query)
         return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def get_last_sync_time(
+    analyzed_username: str, repo_full_name: str | None = None
+) -> datetime | None:
+    """Возвращает самую старую (минимальную) дату синхронизации среди активных репозиториев пользователя."""
+    query = tracked_repos.select().where(
+        tracked_repos.c.analyzed_username == analyzed_username,
+        tracked_repos.c.is_active == True,  # noqa: E712
+    )
+    if repo_full_name:
+        query = query.where(tracked_repos.c.repo_full_name == repo_full_name)
+
+    async with engine.connect() as conn:
+        result = await conn.execute(query)
+        rows = result.fetchall()
+
+    if not rows:
+        return None
+
+    min_dt = None
+    for row in rows:
+        val = row._mapping.get("last_synced_at")
+        if not val:
+            # Если хотя бы один активный репозиторий еще ни разу не синхронизировался — отчет не свежий
+            return None
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if min_dt is None or dt < min_dt:
+                min_dt = dt
+        except Exception:
+            return None
+    return min_dt

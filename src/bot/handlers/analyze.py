@@ -1,5 +1,6 @@
 """Обработчик /analyze @username [period]."""
 
+import io
 import json
 import math
 import uuid
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta
 from html import escape
 
 from telegram import (
+    Bot,
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -14,8 +16,10 @@ from telegram import (
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from src.worker.tasks import format_summary
 from src.bot.app import get_arq_pool
 from src.core import clean_github_username, validate_github_username
+from src.core.report import is_report_fresh, build_analysis_result
 from src.storage.cache import get_redis
 from src.storage import (
     acquire_job_lock,
@@ -26,6 +30,7 @@ from src.storage import (
 )
 from src.storage.database import list_tracked_repos
 from src.bot.keyboards import paginate_inline_keyboard
+from src.models.models import serialize_result
 from src.config import settings
 from src.logger import get_logger
 
@@ -180,10 +185,55 @@ async def start_analysis_job(
     update: Update,
     username: str,
     period: str,
-    repo_full_name: str | None = None,  # <-- Добавлен параметр
+    repo_full_name: str | None = None,
 ) -> None:
     """Универсальная функция запуска анализа с проверкой лимитов."""
     chat_id = str(update.effective_chat.id)
+
+    # ==== ПЕРЕХВАТ FAST-PATH ====
+    if await is_report_fresh(
+        username,
+        repo_full_name=repo_full_name,
+        max_age_seconds=settings.fast_path_max_age,
+    ):
+        logger.info(f"Fast-path triggered for {username} (repo: {repo_full_name})")
+        try:
+            # Мгновенно генерируем отчет из локальной базы данных
+            result = await build_analysis_result(
+                username,
+                period_start=period,
+                period_end=datetime.now().strftime("%Y-%m-%d"),
+                repo_full_name=repo_full_name,
+            )
+            result_json = serialize_result(result)
+
+            # Если запуск произошел из инлайн-кнопок, удаляем само сообщение выбора
+            if update.callback_query:
+                try:
+                    await update.callback_query.delete_message()
+                except Exception:
+                    pass
+
+            # Мгновенно отправляем готовый отчет пользователю в обход очередей
+            await send_report(
+                bot=context.bot,
+                chat_id=chat_id,
+                username=username,
+                result_json=result_json,
+            )
+
+            # Запускаем фоновую тихую синхронизацию, чтобы поддержать актуальность данных
+            pool = await get_arq_pool()
+            await pool.enqueue_job("silent_background_sync", username)
+            return
+        except Exception as e:
+            logger.error(
+                f"Failed to build fast-path report for {username}: {e}. "
+                f"Falling back to normal worker queue."
+            )
+            # В случае любой редкой ошибки генерации откатываемся на стандартный путь с очередью
+
+    # ==== СТАНДАРТНЫЙ ПУТЬ С ОЧЕРЕДЬЮ ARQ ====
 
     # 1. Проверяем индивидуальный кулдаун на этот юзернейм
     cooldown_left = await check_cooldown(chat_id, username)
@@ -302,3 +352,43 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await trigger_analysis_flow(update, context, username, period)
+
+
+async def send_report(
+    bot: Bot,
+    chat_id: str | int,
+    username: str,
+    result_json: str,
+    message_id: int | None = None,
+) -> None:
+    """
+    Универсальный рендеринг и отправка отчёта.
+    Если передан message_id — редактирует существующую квитанцию (путь воркера).
+    Иначе отправляет новое текстовое сообщение в чат (путь fast-path).
+    """
+    summary = format_summary(result_json)
+
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                summary,
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to edit message {message_id}: {e}")
+            await bot.send_message(
+                chat_id=chat_id, text=summary, parse_mode=ParseMode.HTML
+            )
+    else:
+        await bot.send_message(
+            chat_id=chat_id, text=summary, parse_mode=ParseMode.HTML
+        )
+
+    # Отправляем компактный файл отчета
+    json_bytes = io.BytesIO(result_json.encode("utf-8"))
+    json_bytes.name = f"{username}_analysis.json"
+    await bot.send_document(chat_id=chat_id, document=json_bytes)
+
+

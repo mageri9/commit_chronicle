@@ -51,24 +51,18 @@ async def _notify_user(
     result_json: str | None = None,
     error: str | None = None,
 ) -> None:
-    """
-    Отправить итоговое уведомление пользователю.
-
-    Единая точка для start_pubsub_listener и catch_up_missed_events —
-    любое изменение формата уведомления делается здесь один раз.
-    """
+    """Отправить итоговое уведомление пользователю."""
     if status == "done" and result_json:
-        summary = format_summary(result_json)
+        # Импортируем общую функцию отправки результатов
+        from src.bot.handlers.analyze import send_report
 
-        await bot.edit_message_text(
-            summary,
+        await send_report(
+            bot=bot,
             chat_id=chat_id,
-            message_id=message_id,
+            username=username,
+            result_json=result_json,
+            message_id=message_id,  # Указываем квитанцию для редактирования
         )
-
-        json_bytes = io.BytesIO(result_json.encode("utf-8"))
-        json_bytes.name = f"{username}_analysis.json"
-        await bot.send_document(chat_id=chat_id, document=json_bytes)
 
     elif status == "failed":
         await bot.edit_message_text(
