@@ -1,11 +1,16 @@
 """Обработчик /analyze @username [period]."""
 
+import json
+import math
 import uuid
 from datetime import datetime, timedelta
-import json
 from html import escape
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -19,6 +24,8 @@ from src.storage import (
     check_cooldown,
     set_cooldown,
 )
+from src.storage.database import list_tracked_repos
+from src.bot.keyboards import paginate_inline_keyboard
 from src.config import settings
 from src.logger import get_logger
 
@@ -29,8 +36,7 @@ MAX_ANALYSIS_DAYS = 730
 
 
 def get_default_period() -> str:
-    """Дата начала периода по умолчанию — вычисляется на момент вызова,
-    а не один раз при импорте модуля."""
+    """Дата начала периода по умолчанию."""
     return (datetime.now() - timedelta(days=MAX_ANALYSIS_DAYS)).strftime("%Y-%m-%d")
 
 
@@ -44,7 +50,138 @@ def validate_period(period: str) -> bool:
         return False
 
 
-async def start_analysis_job(update: Update, username: str, period: str) -> None:
+async def trigger_analysis_flow(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    username: str,
+    period: str,
+) -> None:
+    """
+    Точка ветвления запуска анализа.
+    Если у пользователя уже есть отслеживаемые репозитории в БД — показываем выбор,
+    иначе — сразу запускаем полный анализ (он сам наполнит базу при первом запуске).
+    """
+    repos = await list_tracked_repos(username)
+    if repos:
+        await show_repo_selection_menu(update, context, username, period)
+    else:
+        await start_analysis_job(update, username, period)
+
+
+async def show_repo_selection_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    username: str,
+    period: str,
+    page: int = 0,
+    edit_existing: bool = False,
+) -> None:
+    """Отрисовка инлайн-меню выбора конкретного репозитория с пагинацией."""
+    from src.bot.handlers.repos import make_safe_callback
+
+    repos = await list_tracked_repos(username)
+    if not repos:
+        await start_analysis_job(update, username, period)
+        return
+
+    # 1. Сбор кнопок репозиториев для текущей страницы
+    page_size = 6  # Ограничиваем, чтобы оставить место под кнопку "Все" и пагинацию
+    total_pages = math.ceil(len(repos) / page_size)
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * page_size
+    end_idx = start_idx + page_size
+    page_repos = repos[start_idx:end_idx]
+
+    repo_buttons = []
+    for r in page_repos:
+        repo_name = r["repo_full_name"]
+        prefix = f"select_repo:run:{username}:{period}"
+        callback_data = await make_safe_callback(repo_name, prefix)
+        repo_buttons.append(
+            InlineKeyboardButton(f"📁 {repo_name}", callback_data=callback_data)
+        )
+
+    # Используем общую утилиту пагинации кнопок
+    paginated_markup = paginate_inline_keyboard(
+        repo_buttons,
+        page,
+        page_size,
+        callback_prefix=f"select_repo:page:{username}:{period}",
+    )
+
+    # 2. Объединяем клавиатуру (Кнопка "Все репозитории" всегда закреплена наверху)
+    all_callback = f"select_repo:all:{username}:{period}"
+    final_keyboard = [
+        [InlineKeyboardButton("📁 Все репозитории", callback_data=all_callback)]
+    ]
+    for row in paginated_markup.inline_keyboard:
+        final_keyboard.append(row)
+
+    reply_markup = InlineKeyboardMarkup(final_keyboard)
+    text = (
+        f"🔎 Выберите репозиторий профиля <b>{username}</b> для точечного анализа "
+        f"или запустите проверку по всем сразу:"
+    )
+
+    if edit_existing and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
+        )
+
+
+async def select_repo_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Обработчик нажатий инлайн-кнопок выбора репозитория перед запуском."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data == "noop":
+        return
+
+    parts = data.split(":", 5)
+    if len(parts) < 4:
+        return
+
+    action = parts[1]
+    username = parts[2]
+    period = parts[3]
+
+    if action == "page":
+        target_page = int(parts[5])
+        await show_repo_selection_menu(
+            update,
+            context,
+            username,
+            period,
+            page=target_page,
+            edit_existing=True,
+        )
+    elif action == "all":
+        # Запуск по всем репозиториям
+        await start_analysis_job(update, username, period, repo_full_name=None)
+    elif action == "run":
+        from src.bot.handlers.repos import resolve_safe_callback
+
+        repo_identifier = parts[4]
+        repo_full_name = await resolve_safe_callback(repo_identifier)
+        await start_analysis_job(
+            update, username, period, repo_full_name=repo_full_name
+        )
+
+
+async def start_analysis_job(
+    update: Update,
+    username: str,
+    period: str,
+    repo_full_name: str | None = None,  # <-- Добавлен параметр
+) -> None:
     """Универсальная функция запуска анализа с проверкой лимитов."""
     chat_id = str(update.effective_chat.id)
 
@@ -52,11 +189,16 @@ async def start_analysis_job(update: Update, username: str, period: str) -> None
     cooldown_left = await check_cooldown(chat_id, username)
     if cooldown_left > 0:
         minutes_left = (cooldown_left + 59) // 60
-        await update.message.reply_text(
+        text = (
             f"⏳ Пожалуйста, подождите. Повторный анализ <b>{escape(username)}</b> "
-            f"будет доступен через {minutes_left} мин.",
-            parse_mode=ParseMode.HTML,
+            f"будет доступен через {minutes_left} мин."
         )
+        if update.callback_query:
+            await update.callback_query.message.reply_text(
+                text, parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         return
 
     # 2. Проверяем суточный лимит запросов пользователя
@@ -64,26 +206,40 @@ async def start_analysis_job(update: Update, username: str, period: str) -> None
         chat_id, settings.max_requests_per_user
     )
     if not is_under_limit:
-        await update.message.reply_text(
+        text = (
             f"❌ Вы превысили суточный лимит анализов ({settings.max_requests_per_user}). "
             f"Попробуйте запустить завтра."
         )
+        if update.callback_query:
+            await update.callback_query.message.reply_text(text)
+        else:
+            await update.message.reply_text(text)
         return
 
     # 3. Пытаемся захватить блокировку параллельного выполнения задач
     job_id = str(uuid.uuid4())
     lock_acquired = await acquire_job_lock(chat_id, job_id)
     if not lock_acquired:
-        await update.message.reply_text(
-            "⏳ У вас уже выполняется другой анализ. Пожалуйста, дождитесь его завершения."
-        )
+        text = "⏳ У вас уже выполняется другой анализ. Пожалуйста, дождитесь его завершения."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(text)
+        else:
+            await update.message.reply_text(text)
         return
 
     # Первичное сообщение-квитанция
-    msg = await update.message.reply_text(
-        f"🔄 Анализирую <b>{escape(username)}</b> с <b>{escape(period)}</b>...",
-        parse_mode=ParseMode.HTML,
+    target_repo_suffix = f" [{repo_full_name}]" if repo_full_name else ""
+    msg_text = (
+        f"🔄 Анализирую <b>{escape(username)}</b>{escape(target_repo_suffix)} "
+        f"с <b>{escape(period)}</b>..."
     )
+
+    if update.callback_query:
+        msg = await update.callback_query.edit_message_text(
+            msg_text, parse_mode=ParseMode.HTML
+        )
+    else:
+        msg = await update.message.reply_text(msg_text, parse_mode=ParseMode.HTML)
 
     try:
         pool = await get_arq_pool()
@@ -98,26 +254,30 @@ async def start_analysis_job(update: Update, username: str, period: str) -> None
 
         await redis.setex(f"job_message:{job_id}", 3600, json.dumps(mapping))
 
+        # Запускаем задачу
         job = await pool.enqueue_job(
             "analyze_github_user",
             username,
             period,
             _job_id=job_id,
             chat_id=chat_id,
+            repo_full_name=repo_full_name,  # <-- Передаем параметр воркеру
         )
 
         # Устанавливаем кулдаун
         await set_cooldown(chat_id, username, settings.user_cooldown_minutes)
 
+        target_repo_info = (
+            f"\n📁 Репозиторий: {escape(repo_full_name)}" if repo_full_name else ""
+        )
         await msg.edit_text(
             f"🔄 Анализ запущен\n"
             f"👤 {escape(username)}\n"
-            f"📅 с {escape(period)}\n"
+            f"📅 с {escape(period)}{target_repo_info}\n"
             f"🆔 <code>{job.job_id}</code>",
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
-        # В случае ошибки снимаем блокировку в Redis
         await release_job_lock(chat_id, job_id)
         logger.error(f"Failed to enqueue job: {e}")
         await msg.edit_text(f"❌ Ошибка запуска: {e}")
@@ -141,4 +301,4 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    await start_analysis_job(update, username, period)
+    await trigger_analysis_flow(update, context, username, period)

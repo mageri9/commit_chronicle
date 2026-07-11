@@ -60,6 +60,12 @@ def main():
     app.add_handler(CommandHandler("repos", repos_command))
     app.add_handler(CallbackQueryHandler(repos_callback, pattern=r"^repos:"))
 
+    from src.bot.handlers.analyze import select_repo_callback
+
+    app.add_handler(
+        CallbackQueryHandler(select_repo_callback, pattern=r"^select_repo:")
+    )
+
     app.add_handler(
         MessageHandler(filters.Regex(r"^/status(_\S+)?(\s+\S+)?$"), status_handler)
     )
