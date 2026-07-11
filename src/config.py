@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # Limits
     max_workers: int = 10
     max_requests_per_user: int = 10
-    user_cooldown_minutes: int = 30
+    user_cooldown_minutes: int = 0
 
     max_backfill_days: int = 730
     fast_path_max_age: int = 120

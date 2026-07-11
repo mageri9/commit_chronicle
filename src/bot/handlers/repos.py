@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 async def make_safe_callback(repo_full_name: str, prefix: str) -> str:
     """Генерирует callback_data длиной <= 64 байт с использованием Redis-маппинга при необходимости."""
     if len(prefix) + 1 + len(repo_full_name) <= 64:
-        return f"{prefix}{repo_full_name}"
+        return f"{prefix}:{repo_full_name}"
 
     import hashlib
 
