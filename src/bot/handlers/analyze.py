@@ -224,7 +224,7 @@ async def start_analysis_job(
     """Универсальная функция запуска анализа с проверкой лимитов."""
     chat_id = str(update.effective_chat.id)
 
-    # ==== ПЕРЕХВАТ FAST-PATH ====
+    # ====ПЕРЕХВАТ FAST-PATH ====
     if await is_report_fresh(
         username,
         repo_full_name=repo_full_name,
@@ -232,7 +232,6 @@ async def start_analysis_job(
     ):
         logger.info(f"Fast-path triggered for {username} (repo: {repo_full_name})")
         try:
-            # Мгновенно генерируем отчет из локальной базы данных
             result = await build_analysis_result(
                 username,
                 period_start=period,
@@ -241,14 +240,12 @@ async def start_analysis_job(
             )
             result_json = serialize_result(result)
 
-            # Если запуск произошел из инлайн-кнопок, удаляем само сообщение выбора
             if update.callback_query:
                 try:
                     await update.callback_query.delete_message()
                 except Exception:
                     pass
 
-            # Мгновенно отправляем готовый отчет пользователю в обход очередей
             await send_report(
                 bot=context.bot,
                 chat_id=chat_id,
@@ -256,7 +253,6 @@ async def start_analysis_job(
                 result_json=result_json,
             )
 
-            # Запускаем фоновую тихую синхронизацию, чтобы поддержать актуальность данных
             pool = await get_arq_pool()
             await pool.enqueue_job("silent_background_sync", username)
             return
@@ -265,9 +261,6 @@ async def start_analysis_job(
                 f"Failed to build fast-path report for {username}: {e}. "
                 f"Falling back to normal worker queue."
             )
-            # В случае любой редкой ошибки генерации откатываемся на стандартный путь с очередью
-
-    # ==== СТАНДАРТНЫЙ ПУТЬ С ОЧЕРЕДЬЮ ARQ ====
 
     # 1. Проверяем индивидуальный кулдаун на этот юзернейм
     cooldown_left = await check_cooldown(chat_id, username)
@@ -278,9 +271,15 @@ async def start_analysis_job(
             f"будет доступен через {minutes_left} мин."
         )
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                text, parse_mode=ParseMode.HTML
-            )
+            try:
+                # Схлопываем инлайн-меню, предотвращая повторные нажатия
+                await update.callback_query.edit_message_text(
+                    text, parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                await update.callback_query.message.reply_text(
+                    text, parse_mode=ParseMode.HTML
+                )
         else:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         return
@@ -295,7 +294,10 @@ async def start_analysis_job(
             f"Попробуйте запустить завтра."
         )
         if update.callback_query:
-            await update.callback_query.message.reply_text(text)
+            try:
+                await update.callback_query.edit_message_text(text)
+            except Exception:
+                await update.callback_query.message.reply_text(text)
         else:
             await update.message.reply_text(text)
         return
@@ -306,7 +308,10 @@ async def start_analysis_job(
     if not lock_acquired:
         text = "⏳ У вас уже выполняется другой анализ. Пожалуйста, дождитесь его завершения."
         if update.callback_query:
-            await update.callback_query.message.reply_text(text)
+            try:
+                await update.callback_query.edit_message_text(text)
+            except Exception:
+                await update.callback_query.message.reply_text(text)
         else:
             await update.message.reply_text(text)
         return
