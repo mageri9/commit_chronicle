@@ -150,16 +150,35 @@ async def select_repo_callback(
     if data == "noop":
         return
 
-    parts = data.split(":", 5)
-    if len(parts) < 4:
+    logger.info(f"select_repo_callback: raw callback data = {data!r}")
+
+    # Заменяем фиксированный split на динамический разбор по колонам
+    parts = data.split(":")
+    if len(parts) < 3:
+        logger.warning(f"select_repo_callback: callback data is too short: {data!r}")
         return
 
     action = parts[1]
     username = parts[2]
-    period = parts[3]
+
+    # Устанавливаем период по умолчанию на случай отсутствия в callback
+    period = get_default_period()
 
     if action == "page":
-        target_page = int(parts[5])
+        # Ожидаем форматы:
+        # 1. select_repo:page:{username}:{period}:page:{target_page} (длина 6)
+        # 2. select_repo:page:{username}:page:{target_page} (длина 5)
+        if "page" in parts:
+            try:
+                idx = parts.index("page", 2)
+                if idx == 4:
+                    period = parts[3]
+                target_page = int(parts[-1])
+            except Exception:
+                target_page = 0
+        else:
+            target_page = 0
+
         await show_repo_selection_menu(
             update,
             context,
@@ -168,15 +187,27 @@ async def select_repo_callback(
             page=target_page,
             edit_existing=True,
         )
+
     elif action == "all":
-        # Запуск по всем репозиториям
-        await start_analysis_job(
-            update, context, username, period, repo_full_name=None
-        )
+        # Ожидаем: select_repo:all:{username}:{period}
+        if len(parts) >= 4:
+            period = parts[3]
+        await start_analysis_job(update, context, username, period, repo_full_name=None)
+
     elif action == "run":
         from src.bot.handlers.repos import resolve_safe_callback
 
-        repo_identifier = parts[4]
+        if len(parts) >= 5:
+            period = parts[3]
+            repo_identifier = parts[4]
+        elif len(parts) == 4:
+            repo_identifier = parts[3]
+        else:
+            logger.warning(
+                f"select_repo_callback: invalid run callback format: {data!r}"
+            )
+            return
+
         repo_full_name = await resolve_safe_callback(repo_identifier)
         await start_analysis_job(
             update, context, username, period, repo_full_name=repo_full_name
