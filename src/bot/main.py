@@ -3,7 +3,12 @@
 import asyncio
 from html import escape
 
-from telegram.ext import CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackQueryHandler,
+)
 from src.bot.app import create_app, catch_up_missed_events, start_pubsub_listener
 from src.bot.handlers.analyze import analyze_command
 from src.bot.handlers.status import status_handler
@@ -49,6 +54,12 @@ def main():
     app = create_app()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("analyze", analyze_command))
+
+    from src.bot.handlers.repos import repos_command, repos_callback
+
+    app.add_handler(CommandHandler("repos", repos_command))
+    app.add_handler(CallbackQueryHandler(repos_callback, pattern=r"^repos:"))
+
     app.add_handler(
         MessageHandler(filters.Regex(r"^/status(_\S+)?(\s+\S+)?$"), status_handler)
     )
@@ -58,7 +69,6 @@ def main():
     )
 
     app.post_init = on_startup
-
     app.run_polling()
 
 

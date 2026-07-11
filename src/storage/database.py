@@ -464,6 +464,17 @@ async def list_tracked_repos(analyzed_username: str) -> list[dict]:
         return [dict(row._mapping) for row in result.fetchall()]
 
 
+async def list_all_tracked_repos(analyzed_username: str) -> list[dict]:
+    """Список абсолютно всех отслеживаемых репозиториев юзера (активных и неактивных)."""
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            tracked_repos.select()
+            .where(tracked_repos.c.analyzed_username == analyzed_username)
+            .order_by(tracked_repos.c.last_pushed_at.desc())
+        )
+        return [dict(row._mapping) for row in result.fetchall()]
+
+
 async def list_repos_by_sync_mode(sync_mode: str) -> list[dict]:
     """Список активных отслеживаемых репозиториев по режиму синхронизации."""
     async with engine.connect() as conn:
