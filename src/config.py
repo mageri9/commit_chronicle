@@ -13,14 +13,6 @@ PLACEHOLDER_MARKER = "xxx"
 
 
 class LLMSettings(BaseSettings):
-    """
-    Настройки LLM-слоя. Вынесены отдельно от основного Settings,
-    потому что сама функция ещё не реализована (см. README → Роадмап).
-    Когда появится LLM-анализ — этот класс станет обязательным блоком
-    основного Settings, а не будет "прятать" необязательные поля среди
-    критичных production-настроек.
-    """
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -56,9 +48,26 @@ class Settings(BaseSettings):
     max_requests_per_user: int = 10
     user_cooldown_minutes: int = 30
 
+    max_backfill_days: int = 730
+
     # Cache TTL in seconds
     cache_ttl_github: int = 3600
     cache_ttl_llm: int = 86400
+
+    # ---------- Вебхуки ----------
+    # По умолчанию выключено. Включается вручную владельцем бота для СВОИХ
+    # репозиториев (см. src/webhook/register.py) — не требует полноценного
+    # OAuth-флоу, достаточно PAT с правами admin:repo_hook. Для остальных
+    # пользователей бота — см. README, раздел "Вебхуки (опционально)".
+    webhook_enabled: bool = False
+    webhook_secret: str = ""
+    # Публичный URL, по которому GitHub будет стучаться (reverse-proxy перед
+    # сервисом webhook из docker-compose.yml), например https://example.com/webhook/github
+    webhook_public_url: str = ""
+    webhook_port: int = 8080
+    # GitHub-логин владельца бота — чьи репозитории регистрируются в
+    # register.py по умолчанию, если не передан явный список.
+    owner_github_username: str = ""
 
     # Logging
     log_level: str = "INFO"
@@ -96,4 +105,10 @@ if not settings.is_configured:
     raise RuntimeError(
         "❌ Настройки содержат placeholder'ы. "
         "Скопируйте .env.example → .env и заполните реальными ключами."
+    )
+
+if settings.webhook_enabled and not settings.webhook_secret:
+    raise RuntimeError(
+        "❌ WEBHOOK_ENABLED=true, но WEBHOOK_SECRET пустой — "
+        "без секрета приём вебхуков небезопасен (нельзя проверить подпись)."
     )
