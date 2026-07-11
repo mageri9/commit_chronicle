@@ -15,7 +15,6 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import row
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 
 from src.config import settings
@@ -46,29 +45,6 @@ requests = Table(
     Column("notified", Boolean, nullable=False, default=False),
     Column("created_at", Text, nullable=False),
     Column("completed_at", Text),
-)
-
-# Устаревшая заготовка под repo-level кеш JSON-блобом — не используется
-# новым пайплайном (src.core.sync / src.core.report), оставлена только
-# чтобы не ломать существующие вызовы get_cached_commits/set_cached_commits,
-# если они где-то остались. Кандидат на удаление.
-commit_cache = Table(
-    "commit_cache",
-    metadata,
-    Column("username", Text, primary_key=True),
-    Column("repo", Text, primary_key=True),
-    Column("period_start", Text, primary_key=True),
-    Column("period_end", Text, primary_key=True),
-    Column("data_json", Text, nullable=False),
-    Column("cached_at", Text, nullable=False),
-)
-
-user_bindings = Table(
-    "user_bindings",
-    metadata,
-    Column("telegram_id", Text, primary_key=True),
-    Column("github_username", Text, nullable=False),
-    Column("linked_at", Text, nullable=False),
 )
 
 
@@ -113,6 +89,16 @@ commits_table = Table(
     # индекс расширений строится один раз при сериализации отчёта, не при записи.
     Column("files_json", Text),
     Column("created_at", Text, nullable=False),
+)
+
+user_bindings = Table(
+    "user_bindings",
+    metadata,
+    # telegram_id — строкой (как и chat_id в requests), т.к. в остальном коде
+    # id из Telegram везде передаётся как str.
+    Column("telegram_id", Text, primary_key=True),
+    Column("github_username", Text, nullable=False),
+    Column("linked_at", Text, nullable=False),
 )
 
 
@@ -282,7 +268,8 @@ async def get_user_binding(telegram_id: str) -> str | None:
             user_bindings.select().where(user_bindings.c.telegram_id == telegram_id)
         )
         row = result.first()
-        return row.github_username if row else None
+        # Используем безопасное обращение через _mapping
+        return row._mapping["github_username"] if row else None
 
 
 async def set_user_binding(telegram_id: str, github_username: str) -> None:
@@ -308,45 +295,6 @@ async def remove_user_binding(telegram_id: str) -> bool:
             user_bindings.delete().where(user_bindings.c.telegram_id == telegram_id)
         )
         return result.rowcount > 0
-
-
-# ---------- API: commit_cache (устаревшее, оставлено на переходный период) ----------
-async def get_cached_commits(
-    username: str, repo: str, period_start: str, period_end: str
-) -> str | None:
-    async with engine.connect() as conn:
-        result = await conn.execute(
-            commit_cache.select().where(
-                commit_cache.c.username == username,
-                commit_cache.c.repo == repo,
-                commit_cache.c.period_start == period_start,
-                commit_cache.c.period_end == period_end,
-            )
-        )
-        row = result.first()
-        return row.data_json if row else None
-
-
-async def set_cached_commits(
-    username: str, repo: str, period_start: str, period_end: str, data_json: str
-) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    async with engine.begin() as conn:
-        await conn.execute(
-            sqlite_insert(commit_cache)
-            .values(
-                username=username,
-                repo=repo,
-                period_start=period_start,
-                period_end=period_end,
-                data_json=data_json,
-                cached_at=now,
-            )
-            .on_conflict_do_update(
-                index_elements=["username", "repo", "period_start", "period_end"],
-                set_={"data_json": data_json, "cached_at": now},
-            )
-        )
 
 
 # ---------- API: tracked_repos / commits ----------

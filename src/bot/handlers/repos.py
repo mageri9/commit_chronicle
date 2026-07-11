@@ -1,7 +1,7 @@
 import math
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes, CallbackContext
+from telegram.ext import ContextTypes
 
 from src.storage.database import (
     get_user_binding,

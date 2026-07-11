@@ -349,33 +349,37 @@ async def reconcile_webhook_repos(ctx: dict) -> None:
                 )
                 discrepancies.append(remote_repo)
 
-            if not discrepancies:
-                continue
-
-            logger.info(
-                f"Reconciliation: triggering synchronization of {len(discrepancies)} "
-                f"repositories for user {username}"
-            )
-
-            try:
-                await sync_user_repos(
-                    service,
-                    discrepancies,
-                    username,
-                    period_start_iso=_backfill_start_iso(),
-                    max_concurrency=settings.max_workers,
-                )
-                synced_count += len(discrepancies)
-            except Exception as e:
-                logger.error(
-                    f"Reconciliation: failed to sync discrepancies for user {username}: {e}"
-                )
+        # Синхронизация запускается один раз на пользователя, после того как
+        # собраны ВСЕ расхождения по его репозиториям (а не на каждой строке).
+        if not discrepancies:
+            continue
 
         logger.info(
-            f"Reconciliation finished. Checked {checked_count} repositories, "
-            f"synced {synced_count} discrepancies."
+            f"Reconciliation: triggering synchronization of {len(discrepancies)} "
+            f"repositories for user {username}"
         )
-        return {"checked": checked_count, "synced": synced_count}
+
+        try:
+            await sync_user_repos(
+                service,
+                discrepancies,
+                username,
+                period_start_iso=_backfill_start_iso(),
+                max_concurrency=settings.max_workers,
+            )
+            synced_count += len(discrepancies)
+        except Exception as e:
+            logger.error(
+                f"Reconciliation: failed to sync discrepancies for user {username}: {e}"
+            )
+
+    # Итоговая сводка — после того как обработаны ВСЕ пользователи,
+    # а не только первый в repos_by_user.
+    logger.info(
+        f"Reconciliation finished. Checked {checked_count} repositories, "
+        f"synced {synced_count} discrepancies."
+    )
+    return {"checked": checked_count, "synced": synced_count}
 
 
 async def silent_background_sync(ctx: dict, username: str) -> None:

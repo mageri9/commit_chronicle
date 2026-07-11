@@ -51,8 +51,6 @@ class Settings(BaseSettings):
     max_backfill_days: int = 730
     fast_path_max_age: int = 120
 
-    max_backfill_days: int = 730
-
     # Cache TTL in seconds
     cache_ttl_github: int = 3600
     cache_ttl_llm: int = 86400

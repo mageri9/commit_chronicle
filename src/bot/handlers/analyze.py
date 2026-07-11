@@ -70,7 +70,7 @@ async def trigger_analysis_flow(
     if repos:
         await show_repo_selection_menu(update, context, username, period)
     else:
-        await start_analysis_job(update, username, period)
+        await start_analysis_job(update, context, username, period)
 
 
 async def show_repo_selection_menu(
@@ -86,7 +86,7 @@ async def show_repo_selection_menu(
 
     repos = await list_tracked_repos(username)
     if not repos:
-        await start_analysis_job(update, username, period)
+        await start_analysis_job(update, context, username, period)
         return
 
     # 1. Сбор кнопок репозиториев для текущей страницы
@@ -170,19 +170,22 @@ async def select_repo_callback(
         )
     elif action == "all":
         # Запуск по всем репозиториям
-        await start_analysis_job(update, username, period, repo_full_name=None)
+        await start_analysis_job(
+            update, context, username, period, repo_full_name=None
+        )
     elif action == "run":
         from src.bot.handlers.repos import resolve_safe_callback
 
         repo_identifier = parts[4]
         repo_full_name = await resolve_safe_callback(repo_identifier)
         await start_analysis_job(
-            update, username, period, repo_full_name=repo_full_name
+            update, context, username, period, repo_full_name=repo_full_name
         )
 
 
 async def start_analysis_job(
     update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
     username: str,
     period: str,
     repo_full_name: str | None = None,

@@ -1,7 +1,6 @@
 """Фабрика Telegram-приложения."""
 
 import asyncio
-import io
 import json
 
 from arq import create_pool
@@ -15,7 +14,6 @@ from src.storage.database import get_request, get_unnotified_requests, mark_as_n
 from src.storage.pubsub import subscribe
 from src.storage.redis import get_redis
 from src.storage.cache import release_job_lock
-from src.worker.tasks import format_summary
 
 logger = get_logger(__name__)
 

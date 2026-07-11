@@ -20,12 +20,3 @@ class TokenExhaustedError(CollectorError):
 
     def __init__(self, message: str = "Все GitHub-токены исчерпаны"):
         super().__init__(message)
-
-
-class RepoAccessError(CollectorError):
-    """Репозиторий недоступен (404, 403)."""
-
-    def __init__(self, repo: str, status: int):
-        self.repo = repo
-        self.status = status
-        super().__init__(f"Репозиторий {repo} недоступен (HTTP {status})")
