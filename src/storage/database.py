@@ -15,6 +15,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import row
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 
 from src.config import settings
@@ -348,7 +349,7 @@ async def set_cached_commits(
         )
 
 
-# ---------- API: tracked_repos / commits (новое, Этап 1) ----------
+# ---------- API: tracked_repos / commits ----------
 
 
 async def get_tracked_repo(repo_full_name: str, analyzed_username: str) -> dict | None:
@@ -459,6 +460,18 @@ async def list_tracked_repos(analyzed_username: str) -> list[dict]:
                 tracked_repos.c.is_active == True,  # noqa: E712
             )
             .order_by(tracked_repos.c.last_pushed_at.desc())
+        )
+        return [dict(row._mapping) for row in result.fetchall()]
+
+
+async def list_repos_by_sync_mode(sync_mode: str) -> list[dict]:
+    """Список активных отслеживаемых репозиториев по режиму синхронизации."""
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            tracked_repos.select().where(
+                tracked_repos.c.sync_mode == sync_mode,
+                tracked_repos.c.is_active == True,  # noqa: E712
+            )
         )
         return [dict(row._mapping) for row in result.fetchall()]
 

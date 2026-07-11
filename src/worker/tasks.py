@@ -19,7 +19,11 @@ from src.storage.database import (
     upsert_commits,
     upsert_tracked_repo,
     set_repo_needs_full_resync,
+    list_repos_by_sync_mode,
 )
+
+from src.github.models import Repository
+
 from src.storage.pubsub import publish
 from src.logger import get_logger
 
@@ -275,3 +279,100 @@ async def handle_push_event(ctx, payload: dict) -> dict:
 
     logger.info(f"{repo_full_name}: webhook добавил {total_written} коммит(ов)")
     return {"status": "done", "repo": repo_full_name, "commits": total_written}
+
+
+async def reconcile_webhook_repos(ctx) -> dict:
+    """
+    Периодическая сверка метаданных вебхук-репозиториев (safety-net).
+    Группирует активные вебхук-репозитории по analyzed_username и запрашивает
+    состояние репозиториев одним пакетным GraphQL-запросом на пользователя.
+    При обнаружении расхождений по дате pushed_at запускает досинхронизацию.
+    """
+    logger.info("Reconciliation: starting safety-net sync checks...")
+    service = await get_github_service()
+
+    db_repos = await list_repos_by_sync_mode("webhook")
+    if not db_repos:
+        logger.info("Reconciliation: no active webhook-tracked repositories found.")
+        return {"status": "skipped", "reason": "no webhook repos"}
+
+    repos_by_user: dict[str, list[dict]] = {}
+    for r in db_repos:
+        repos_by_user.setdefault(r["analyzed_username"], []).append(r)
+
+    synced_count = 0
+    checked_count = 0
+
+    def dates_match(db_val: str | None, remote_val: datetime | None) -> bool:
+        if not db_val and not remote_val:
+            return True
+        if not db_val or not remote_val:
+            return False
+        try:
+            db_dt = datetime.fromisoformat(db_val.replace("Z", "+00:00"))
+            return abs((db_dt - remote_val).total_seconds()) < 1.0
+        except Exception as e:
+            logger.warning(
+                f"Reconciliation: dates_match failed (db: {db_val}, remote: {remote_val}): {e}"
+            )
+            return False
+
+    for username, db_rows in repos_by_user.items():
+        logger.debug(f"Reconciliation: checking repositories for user '{username}'")
+        try:
+            remote_repos = await service.list_repositories(username)
+        except Exception as e:
+            logger.error(
+                f"Reconciliation: failed to list repositories for user {username}: {e}"
+            )
+            continue
+
+        remote_by_name = {r.full_name: r for r in remote_repos}
+        discrepancies: list[Repository] = []
+
+        for row in db_rows:
+            checked_count += 1
+            repo_full_name = row["repo_full_name"]
+            remote_repo = remote_by_name.get(repo_full_name)
+
+            if not remote_repo:
+                logger.warning(
+                    f"Reconciliation: tracked repo {repo_full_name} is not visible in "
+                    f"list_repositories for user {username} (missing access or deleted)"
+                )
+                continue
+
+            if not dates_match(row.get("last_synced_at"), remote_repo.pushed_at):
+                logger.info(
+                    f"Reconciliation: detected discrepancy for {repo_full_name} "
+                    f"(db: {row.get('last_pushed_at')}, remote: {remote_repo.pushed_at})"
+                )
+                discrepancies.append(remote_repo)
+
+            if not discrepancies:
+                continue
+
+            logger.info(
+                f"Reconciliation: triggering synchronization of {len(discrepancies)} "
+                f"repositories for user {username}"
+            )
+
+            try:
+                await sync_user_repos(
+                    service,
+                    discrepancies,
+                    username,
+                    period_start_iso=_backfill_start_iso(),
+                    max_concurrency=settings.max_workers,
+                )
+                synced_count += len(discrepancies)
+            except Exception as e:
+                logger.error(
+                    f"Reconciliation: failed to sync discrepancies for user {username}: {e}"
+                )
+
+        logger.info(
+            f"Reconciliation finished. Checked {checked_count} repositories, "
+            f"synced {synced_count} discrepancies."
+        )
+        return {"checked": checked_count, "synced": synced_count}

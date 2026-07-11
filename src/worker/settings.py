@@ -2,7 +2,12 @@
 Конфигурация arq-воркера.
 """
 
-from src.worker.tasks import analyze_github_user, handle_push_event
+from arq import cron
+from src.worker.tasks import (
+    analyze_github_user,
+    handle_push_event,
+    reconcile_webhook_repos,
+)
 from src.storage.database import init_db, recover_stuck_requests
 from arq.connections import RedisSettings
 from src.logger import get_logger
@@ -13,10 +18,13 @@ logger = get_logger(__name__)
 
 
 class WorkerSettings:
-    # handle_push_event зарегистрирован здесь же, чтобы обработка вебхуков
-    # шла через тот же пул воркеров, что и обычный /analyze — отдельного
-    # процесса/движка под вебхуки нет (см. ТЗ, "докачка через те же воркеры").
-    functions = [analyze_github_user, handle_push_event]
+    functions = [
+        analyze_github_user,
+        handle_push_event,
+        reconcile_webhook_repos,
+    ]
+
+    cron_jobs = [cron(reconcile_webhook_repos, hour={0, 6, 12, 18}, minute=0)]
 
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
 
