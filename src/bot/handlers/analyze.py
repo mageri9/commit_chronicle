@@ -89,17 +89,9 @@ async def show_repo_selection_menu(
         await start_analysis_job(update, context, username, period)
         return
 
-    # 1. Сбор кнопок репозиториев для текущей страницы
-    page_size = 6  # Ограничиваем, чтобы оставить место под кнопку "Все" и пагинацию
-    total_pages = math.ceil(len(repos) / page_size)
-    page = max(0, min(page, total_pages - 1))
-
-    start_idx = page * page_size
-    end_idx = start_idx + page_size
-    page_repos = repos[start_idx:end_idx]
-
+    # 1. Сбор кнопок для ВСЕХ репозиториев (передаем полный список без предварительной нарезки!)
     repo_buttons = []
-    for r in page_repos:
+    for r in repos:
         repo_name = r["repo_full_name"]
         prefix = f"select_repo:run:{username}:{period}"
         callback_data = await make_safe_callback(repo_name, prefix)
@@ -107,7 +99,9 @@ async def show_repo_selection_menu(
             InlineKeyboardButton(f"📁 {repo_name}", callback_data=callback_data)
         )
 
-    # Используем общую утилиту пагинации кнопок
+    # 2. Передаем полный список кнопок в утилиту пагинации.
+    # Она сама нарежет нужную страницу (по 6 штук) и добавит стрелки навигации.
+    page_size = 6
     paginated_markup = paginate_inline_keyboard(
         repo_buttons,
         page,
@@ -115,7 +109,7 @@ async def show_repo_selection_menu(
         callback_prefix=f"select_repo:page:{username}:{period}",
     )
 
-    # 2. Объединяем клавиатуру (Кнопка "Все репозитории" всегда закреплена наверху)
+    # 3. Объединяем клавиатуру (Кнопка "Все репозитории" всегда закреплена наверху)
     all_callback = f"select_repo:all:{username}:{period}"
     final_keyboard = [
         [InlineKeyboardButton("📁 Все репозитории", callback_data=all_callback)]
