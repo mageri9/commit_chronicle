@@ -52,6 +52,29 @@ services:
     networks:
       - chronicle_net
 
+  # Опционально — только если WEBHOOK_ENABLED=true в .env (см. README →
+  # "Вебхуки"). Не требует БД/telegram-зависимостей, единственная задача —
+  # проверить подпись и положить payload в ту же arq-очередь, что читает
+  # worker. Порт наружу отдаётся через свой reverse-proxy (не входит в этот
+  # docker-compose), сюда пробрасывается только внутренний порт.
+  webhook:
+    image: ghcr.io/mageri9/commit_chronicle:latest
+    container_name: chronicle_webhook
+    command: python -m src.webhook.server
+    restart: unless-stopped
+    profiles: [ "webhook" ]
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://chronicle_redis:6379/0
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - chronicle_net
+
 volumes:
   chronicle_redis_data:
 
