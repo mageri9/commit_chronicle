@@ -70,6 +70,16 @@ async def is_report_fresh(
 
     Смотрим last_synced_at по отслеживаемым репо — если синхронизировались
     недавно, считаем данные достаточно свежими для мгновенной выдачи из БД.
+
+    ВАЖНО: это допущение верно только для sync_mode="webhook" — там между
+    синками БД обновляется пушами в реальном времени, так что "давно
+    синкались, но ничего нового и не могло появиться" — обоснованное
+    предположение. Для sync_mode="poll" никто не сообщает боту о новых
+    коммитах между вызовами /analyze: last_synced_at "свежий" только
+    потому, что мы недавно САМИ его туда записали, а не потому, что с тех
+    пор в GitHub точно ничего не изменилось. Поэтому для чисто поллинговых
+    репозиториев fast-path отключаем — /analyze должен реально дойти до
+    GitHub и досинхронизироваться, а не отдать снэпшот из БД.
     """
     from src.storage.database import (
         list_tracked_repos,
@@ -88,6 +98,8 @@ async def is_report_fresh(
 
     now = datetime.now().astimezone()
     for repo in repos:
+        if repo.get("sync_mode") != "webhook":
+            return False
         last_synced_at = repo.get("last_synced_at")
         if not last_synced_at:
             return False
