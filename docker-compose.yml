@@ -51,12 +51,8 @@ services:
       - ./logs:/app/logs
     networks:
       - chronicle_net
+      - nexus_shared # <-- Подключаем к общей сети для связи с вебхуком Nexus
 
-  # Опционально — только если WEBHOOK_ENABLED=true в .env (см. README →
-  # "Вебхуки"). Не требует БД/telegram-зависимостей, единственная задача —
-  # проверить подпись и положить payload в ту же arq-очередь, что читает
-  # worker. Порт наружу отдаётся через свой reverse-proxy (не входит в этот
-  # docker-compose), сюда пробрасывается только внутренний порт.
   webhook:
     image: ghcr.io/mageri9/commit_chronicle:latest
     container_name: chronicle_webhook
@@ -74,6 +70,7 @@ services:
         condition: service_healthy
     networks:
       - chronicle_net
+      - nexus_shared # <-- Подключаем к общей сети
 
 volumes:
   chronicle_redis_data:
@@ -81,3 +78,5 @@ volumes:
 networks:
   chronicle_net:
     driver: bridge
+  nexus_shared:
+    external: true # <-- Объявляем внешнюю общую сеть

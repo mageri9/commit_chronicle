@@ -1,5 +1,3 @@
-"""Точка входа Telegram-бота."""
-
 import asyncio
 from html import escape
 
@@ -52,6 +50,38 @@ async def on_startup(app):
 
 def main():
     app = create_app()
+
+    # --- ИНТЕГРАЦИЯ NEXUS SDK ---
+    from os import environ
+
+    nexus_sdk = None
+    nexus_secret = environ.get("NEXUS_APP_SECRET", "")
+    nexus_url = environ.get(
+        "NEXUS_ENDPOINT_URL", "http://nexus-webhook:8000/events/app"
+    )
+
+    if nexus_secret:
+        try:
+            from nexus_sdk import NexusSDK
+
+            nexus_sdk = NexusSDK(
+                endpoint_url=nexus_url,
+                app_secret=nexus_secret,
+                project_name="chronicle",  # Должно строго совпадать с именем в manifests
+            )
+            # 1. Регистрируем глобальный перехватчик исключений python-telegram-bot
+            nexus_sdk.register_ptb_error_handler(app)
+            # 2. Запускаем периодическую отправку пульса (Heartbeat) каждые 15 секунд
+            nexus_sdk.start_heartbeat(interval_seconds=15)
+            print(
+                "📡 Nexus SDK Observability initialized successfully for python-telegram-bot (Heartbeat & Error Handler)"
+            )
+        except Exception as e:
+            print(f"Failed to initialize Nexus SDK: {e}")
+    else:
+        print("⚠️ NEXUS_APP_SECRET is not set in environment. Nexus SDK is disabled.")
+    # ----------------------------
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("analyze", analyze_command))
 
@@ -69,13 +99,25 @@ def main():
     app.add_handler(
         MessageHandler(filters.Regex(r"^/status(_\S+)?(\s+\S+)?$"), status_handler)
     )
-    # Регистрируем обработчик текстовых сообщений меню и парсера
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, menu_message_handler)
     )
 
     app.post_init = on_startup
-    app.run_polling()
+
+    try:
+        app.run_polling()
+    finally:
+        # Грациозное закрытие сессии Nexus SDK по завершении работы полинга
+        if nexus_sdk:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(nexus_sdk.close())
+                else:
+                    loop.run_until_complete(nexus_sdk.close())
+            except Exception as e:
+                print(f"Failed to close Nexus SDK: {e}")
 
 
 if __name__ == "__main__":
