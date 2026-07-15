@@ -5,8 +5,6 @@ import traceback
 import httpx
 import asyncio
 from datetime import datetime, timezone
-from aiogram import Dispatcher
-from aiogram.types import ErrorEvent
 
 
 class NexusSDK:
@@ -26,7 +24,6 @@ class NexusSDK:
             except asyncio.CancelledError:
                 pass
         await self._client.aclose()
-
 
     def sign_payload(self, body_bytes: bytes) -> str:
         """Генерирует HMAC-SHA256 подпись тела запроса"""
@@ -65,7 +62,9 @@ class NexusSDK:
                 self.endpoint_url, content=body_bytes, headers=headers
             )
             if resp.status_code != 200:
-                print(f"[NexusSDK] Failed to send error report: {resp.status_code} {resp.text}")
+                print(
+                    f"[NexusSDK] Failed to send error report: {resp.status_code} {resp.text}"
+                )
         except Exception as e:
             print(f"[NexusSDK] Connection error to Nexus: {e}")
 
@@ -98,24 +97,34 @@ class NexusSDK:
                     print(
                         f"[NexusSDK] Heartbeat failed: {resp.status_code} {resp.text}"
                     )
+                else:
+                    pass
             except Exception as e:
                 print(f"[NexusSDK] Heartbeat connection error: {e}")
 
             await asyncio.sleep(interval)
 
-    def register_aiogram_error_handler(self, dp: Dispatcher) -> None:
+    def register_aiogram_error_handler(self, dp) -> None:
         """Интегрирует глобальный перехватчик исключений в aiogram Dispatcher"""
+        # Ленивый импорт aiogram только при вызове метода.
+        # Это предотвращает падение на других фреймворках (например, python-telegram-bot).
+        try:
+            from aiogram.types import ErrorEvent
+        except ImportError:
+            raise ImportError(
+                "aiogram не установлен в текущем окружении. "
+                "Метод register_aiogram_error_handler доступен только для проектов на aiogram."
+            )
+
         @dp.errors()
         async def aiogram_error_handler(event: ErrorEvent):
             exception = event.exception
-            # Попытка сериализовать апдейт aiogram для контекста
             update_ctx = (
                 str(event.update.model_dump())
                 if hasattr(event.update, "model_dump")
                 else str(event.update)
             )
             await self.report_error(exception, context=update_ctx)
-            # Пробрасываем ошибку дальше для штатной работы бота
             raise exception
 
     def register_ptb_error_handler(self, app) -> None:
@@ -123,12 +132,10 @@ class NexusSDK:
 
         async def ptb_error_handler(update: object, context) -> None:
             exception = context.error
-            # Захват контекста обновления в строковом виде
             update_ctx = (
                 str(update.to_dict()) if hasattr(update, "to_dict") else str(update)
             )
             await self.report_error(exception, context=update_ctx)
-            # Пробрасываем исключение дальше для штатной работы фреймворка
             raise exception
 
         app.add_error_handler(ptb_error_handler)
