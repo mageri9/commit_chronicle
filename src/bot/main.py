@@ -48,6 +48,12 @@ async def on_startup(app):
     await catch_up_missed_events(app)
     asyncio.create_task(start_pubsub_listener(app))
 
+    # --- Запускаем пульс только когда событийный цикл активен ---
+    if hasattr(app, "nexus_sdk") and app.nexus_sdk:
+        app.nexus_sdk.start_heartbeat(interval_seconds=15)
+        logger.info("📡 Nexus SDK Heartbeat task started in running event loop")
+    # ------------------------------------------------------------------------
+
 
 def main():
     app = create_app()
@@ -72,10 +78,12 @@ def main():
             )
             # 1. Регистрируем глобальный перехватчик исключений python-telegram-bot
             nexus_sdk.register_ptb_error_handler(app)
-            # 2. Запускаем периодическую отправку пульса (Heartbeat) каждые 15 секунд
-            nexus_sdk.start_heartbeat(interval_seconds=15)
+
+            # 2. Сохраняем ссылку в контекст приложения для отложенного запуска в on_startup
+            app.nexus_sdk = nexus_sdk
+
             logger.info(
-                "📡 Nexus SDK Observability initialized successfully for python-telegram-bot (Heartbeat & Error Handler)"
+                "📡 Nexus SDK Observability registered (Heartbeat scheduled for post_init)"
             )
         except Exception as e:
             logger.error(f"Failed to initialize Nexus SDK: {e}")
@@ -106,12 +114,13 @@ def main():
         MessageHandler(filters.TEXT & ~filters.COMMAND, menu_message_handler)
     )
 
+    # Передаем функцию startup в пост-инициализацию
     app.post_init = on_startup
 
     try:
         app.run_polling()
     finally:
-        # Грациозное закрытие сессии Nexus SDK по завершении работы полинга
+        # Грациозно закрываем сессию по завершении работы полинга
         if nexus_sdk:
             try:
                 loop = asyncio.get_event_loop()
@@ -120,7 +129,7 @@ def main():
                 else:
                     loop.run_until_complete(nexus_sdk.close())
             except Exception as e:
-                print(f"Failed to close Nexus SDK: {e}")
+                logger.error(f"Failed to close Nexus SDK: {e}")
 
 
 if __name__ == "__main__":
